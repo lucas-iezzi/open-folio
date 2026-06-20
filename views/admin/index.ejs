@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <title>Dashboard — Admin</title>
+</head>
+<body>
+
+  <nav class="admin-nav" role="navigation">
+    <div class="admin-nav-inner">
+      <a href="/admin/dashboard" class="admin-nav-brand-icon">
+        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <span class="admin-nav-label">admin</span>
+      </a>
+      <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
+        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+      </a>
+      <div class="admin-nav-actions">
+        <a href="/" class="admin-nav-link" target="_blank" rel="noopener noreferrer">View site ↗</a>
+        <a href="/admin/logout" class="admin-nav-link">Sign out</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="admin-container">
+
+    <div class="admin-tabs" role="tablist" aria-label="Admin sections">
+      <button class="admin-tab is-active" role="tab" aria-selected="true" aria-controls="tab-projects" data-tab="projects">Projects</button>
+    </div>
+
+    <div class="admin-tab-panel is-active" id="tab-projects" role="tabpanel">
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">Projects</h1>
+        <div class="admin-page-header-actions">
+          <a href="/admin/projects/export" class="btn btn-secondary btn-sm">↓ Export JSON</a>
+          <button type="button" id="import-btn" class="btn btn-secondary btn-sm">↑ Import JSON</button>
+          <input type="file" id="import-file-input" accept=".json,application/json" style="display:none" aria-hidden="true">
+          <a href="/admin/projects/new" class="btn btn-primary">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M7 2v10M2 7h10"/>
+            </svg>
+            New project
+          </a>
+        </div>
+      </div>
+      <div id="import-status" style="font-size:13px; margin-bottom:12px;"></div>
+
+      <% if (flash) { %>
+      <div class="flash flash-success" role="status"><%= flash %></div>
+      <% } %>
+
+      <% if (projects.length === 0) { %>
+      <div class="flash flash-success" style="background:none; border-color: var(--border); color: var(--muted);">
+        No projects yet. <a href="/admin/projects/new" style="color:var(--text); text-decoration:underline;">Create your first project →</a>
+      </div>
+      <% } else { %>
+
+      <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+        Drag <span aria-hidden="true">⠿</span> to reorder. Order controls the homepage grid.
+      </p>
+
+      <div class="project-list" id="project-list" role="list">
+        <% projects.forEach(function(project) { %>
+        <div
+          class="project-list-item"
+          data-slug="<%= project.slug %>"
+          role="listitem"
+          aria-label="<%= project.title %>"
+        >
+          <span class="drag-handle" title="Drag to reorder" aria-label="Drag to reorder" role="button" tabindex="0">⠿</span>
+
+          <% if (project.thumbnail) { %>
+          <img
+            class="list-thumb"
+            src="<%= project.thumbnail %>"
+            alt=""
+            loading="lazy"
+            aria-hidden="true"
+          >
+          <% } else { %>
+          <div class="list-thumb-placeholder" aria-hidden="true"></div>
+          <% } %>
+
+          <div>
+            <div class="project-list-title"><%= project.title %></div>
+            <div class="project-list-slug">/projects/<%= project.slug %></div>
+          </div>
+
+          <div class="project-list-actions">
+            <a
+              href="/projects/<%= project.slug %>"
+              class="btn btn-ghost btn-sm"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Preview"
+              aria-label="Preview <%= project.title %>"
+            >Preview ↗</a>
+
+            <a
+              href="/admin/projects/<%= project.slug %>/edit"
+              class="btn btn-secondary btn-sm"
+              aria-label="Edit <%= project.title %>"
+            >Edit</a>
+
+            <button
+              type="button"
+              class="btn btn-danger btn-sm delete-project-btn"
+              data-slug="<%= project.slug %>"
+              data-title="<%= project.title %>"
+              aria-label="Delete <%= project.title %>"
+            >Delete</button>
+          </div>
+        </div>
+        <% }); %>
+      </div>
+
+      <% } %>
+
+    </div><!-- /tab-projects -->
+
+  </div>
+
+  <script src="/js/admin.js" defer></script>
+</body>
+</html>

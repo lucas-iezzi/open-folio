@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <title>Lucas Iezzi</title>
+  <meta name="description" content="Lucas Iezzi — product designer and creative engineer.">
+</head>
+<body>
+  <%- include('partials/nav') %>
+
+  <main>
+    <div class="container">
+
+      <section class="hero" aria-label="Introduction">
+        <h1 class="site-name">lucas<br>iezzi</h1>
+        <p class="hero-text">
+          I am a creative problem solver <span class="highlight">crafting</span> products that are engineered for enjoyment
+        </p>
+      </section>
+
+      <% if (projects.length > 0) { %>
+      <section aria-label="Portfolio projects">
+        <div class="project-grid" role="list">
+          <% projects.forEach(function(project) { %>
+          <article role="listitem">
+            <a
+              class="project-card"
+              href="/projects/<%= project.slug %>"
+              aria-label="<%= project.title %>"
+            >
+              <div class="project-card-image">
+                <% if (project.thumbnail) { %>
+                  <img
+                    src="<%= project.thumbnail %>"
+                    alt="<%= project.thumbnailAlt || project.title %>"
+                    loading="lazy"
+                    decoding="async"
+                  >
+                <% } else { %>
+                  <div class="project-card-placeholder" aria-hidden="true"></div>
+                <% } %>
+              </div>
+              <h2 class="project-card-title"><%= project.title %></h2>
+            </a>
+          </article>
+          <% }); %>
+        </div>
+      </section>
+      <% } %>
+
+    </div>
+  </main>
+
+  <%- include('partials/footer') %>
+  <script src="/js/main.js" defer></script>
+</body>
+</html>

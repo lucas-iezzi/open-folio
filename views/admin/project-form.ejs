@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <% const isEdit = project !== null; %>
+  <title><%= isEdit ? 'Edit: ' + project.title : 'New Project' %> — Admin</title>
+</head>
+<body>
+
+  <nav class="admin-nav" role="navigation">
+    <div class="admin-nav-inner">
+      <a href="/admin/dashboard" class="admin-nav-brand-icon">
+        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <span class="admin-nav-label">admin</span>
+      </a>
+      <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
+        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+      </a>
+      <div class="admin-nav-actions">
+        <a href="/admin/dashboard" class="admin-nav-link">← Dashboard</a>
+        <% if (isEdit) { %>
+        <a href="/projects/<%= project.slug %>" class="admin-nav-link" target="_blank" rel="noopener noreferrer">Preview ↗</a>
+        <% } %>
+        <a href="/admin/logout" class="admin-nav-link">Sign out</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="admin-container form-page">
+
+    <div class="admin-page-header">
+      <h1 class="admin-page-title"><%= isEdit ? 'Edit project' : 'New project' %></h1>
+    </div>
+
+    <% if (error) { %>
+    <div class="flash flash-error" role="alert"><%= error %></div>
+    <% } %>
+
+    <%# Hidden serialized existing sections for JS to read %>
+    <script id="existing-sections-data" type="application/json">
+      <%- JSON.stringify(isEdit ? project.sections : []) %>
+    </script>
+
+    <form
+      id="project-form"
+      data-mode="<%= isEdit ? 'edit' : 'new' %>"
+      data-slug="<%= isEdit ? project.slug : '' %>"
+      novalidate
+    >
+
+      <!-- ── Core info ─────────────────────────────────────────── -->
+      <div class="form-card">
+        <div class="form-card-title">Project info</div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="f-title">Card title <span class="label-hint">required · shown on homepage grid</span></label>
+            <input
+              type="text"
+              id="f-title"
+              name="title"
+              value="<%= isEdit ? project.title : '' %>"
+              placeholder="e.g. Golf Ball Picker"
+              maxlength="200"
+              autocomplete="off"
+            >
+          </div>
+          <div class="field">
+            <label for="f-subtitle">Subtitle <span class="label-hint">shown below page heading</span></label>
+            <input
+              type="text"
+              id="f-subtitle"
+              name="subtitle"
+              value="<%= isEdit ? project.subtitle : '' %>"
+              placeholder="e.g. Pushcart to Pick up Golf Balls"
+              maxlength="300"
+            >
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="f-pagetitle">Page heading <span class="label-hint">H1 on project page · leave blank to use card title</span></label>
+          <input
+            type="text"
+            id="f-pagetitle"
+            name="pageTitle"
+            value="<%= isEdit ? (project.pageTitle || '') : '' %>"
+            placeholder="e.g. Transportable Computer Workstation"
+            maxlength="200"
+          >
+        </div>
+
+        <% if (!isEdit) { %>
+        <div class="field">
+          <label for="f-slug">
+            URL slug
+            <span class="label-hint">auto-generated · letters, numbers, hyphens only</span>
+          </label>
+          <div class="slug-input-wrap">
+            <span class="slug-prefix">/projects/</span>
+            <input
+              type="text"
+              id="f-slug"
+              name="slug"
+              value=""
+              placeholder="golf-ball-picker"
+              maxlength="80"
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </div>
+          <p class="field-error" id="slug-error" role="alert" style="display:none"></p>
+        </div>
+        <% } else { %>
+        <div class="field">
+          <label>URL slug <span class="label-hint">cannot be changed after creation</span></label>
+          <div class="slug-input-wrap">
+            <span class="slug-prefix">/projects/</span>
+            <input type="text" value="<%= project.slug %>" disabled aria-disabled="true" style="opacity:0.6; cursor:not-allowed;">
+          </div>
+        </div>
+        <% } %>
+      </div>
+
+      <!-- ── Thumbnail ─────────────────────────────────────────── -->
+      <div class="form-card">
+        <div class="form-card-title">Homepage thumbnail</div>
+
+        <input type="hidden" name="thumbnail" value="<%= isEdit ? project.thumbnail : '' %>">
+
+        <div class="thumb-upload-area">
+          <% if (isEdit && project.thumbnail) { %>
+          <img
+            id="thumb-preview"
+            class="thumb-preview"
+            src="<%= project.thumbnail %>"
+            alt="Current thumbnail"
+          >
+          <% } else { %>
+          <div class="thumb-preview-placeholder" id="thumb-preview-placeholder" aria-hidden="true">No image</div>
+          <img id="thumb-preview" class="thumb-preview" src="" alt="" style="display:none">
+          <% } %>
+
+          <div class="thumb-upload-actions">
+            <label for="thumb-file-input" class="btn btn-secondary" style="cursor:pointer;">
+              <%= (isEdit && project.thumbnail) ? 'Replace image' : 'Upload thumbnail' %>
+            </label>
+            <input
+              type="file"
+              id="thumb-file-input"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              style="display:none"
+              aria-label="Upload thumbnail image"
+            >
+            <p class="thumb-upload-note">JPEG, PNG, GIF or WebP · max 20 MB<br>Recommended: 3:2 ratio (e.g. 900×600 px)</p>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top:16px;">
+          <label for="f-thumb-alt">Thumbnail alt text <span class="label-hint">for screen readers</span></label>
+          <input
+            type="text"
+            id="f-thumb-alt"
+            name="thumbnailAlt"
+            value="<%= isEdit ? project.thumbnailAlt : '' %>"
+            placeholder="e.g. Golf Ball Picker in action"
+            maxlength="200"
+          >
+        </div>
+      </div>
+
+      <!-- ── Sections ──────────────────────────────────────────── -->
+      <div class="form-card">
+        <div class="form-card-title">
+          Content sections
+          <span class="label-hint" style="font-size:11px; margin-left:8px;">drag to reorder</span>
+        </div>
+
+        <div id="sections-list" class="sections-list" aria-label="Project sections" role="list">
+          <%# Sections are rendered by admin.js from #existing-sections-data %>
+        </div>
+
+        <button
+          type="button"
+          id="add-section-btn"
+          class="add-section-btn"
+          style="margin-top:12px;"
+          aria-label="Add a new section"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M7 2v10M2 7h10"/>
+          </svg>
+          Add section
+        </button>
+      </div>
+
+    </form>
+  </div>
+
+  <!-- ── Sticky save bar ─────────────────────────────────────── -->
+  <div class="form-footer" role="toolbar" aria-label="Save actions">
+    <span id="form-status" class="form-footer-status" role="status" aria-live="polite"></span>
+    <div class="form-footer-actions">
+      <a href="/admin/dashboard" class="btn btn-secondary">Cancel</a>
+      <button type="button" id="save-btn" class="btn btn-primary">
+        <%= isEdit ? 'Save changes' : 'Create project' %>
+      </button>
+    </div>
+  </div>
+
+  <script src="/js/admin.js" defer></script>
+</body>
+</html>

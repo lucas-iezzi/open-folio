@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <title>Error — Lucas Iezzi</title>
+</head>
+<body>
+  <%- include('partials/nav') %>
+  <main>
+    <div class="container">
+      <div class="error-page">
+        <p class="error-page__code">500</p>
+        <h1 class="error-page__title">Something went wrong</h1>
+        <p class="error-page__body"><%= message || 'An unexpected error occurred.' %></p>
+        <a href="/">Return home</a>
+      </div>
+    </div>
+  </main>
+  <%- include('partials/footer') %>
+  <script src="/js/main.js" defer></script>
+</body>
+</html>

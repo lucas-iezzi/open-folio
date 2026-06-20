@@ -1,0 +1,13 @@
+# Caddyfile — copy to /etc/caddy/Caddyfile on the server, then: systemctl reload caddy
+#
+# Replace lucasiezzi.com with your actual domain.
+# Caddy handles HTTPS automatically via Let's Encrypt — no certbot needed.
+
+lucasiezzi.com {
+    reverse_proxy localhost:3000
+}
+
+# To add a second service on the same server later, just add another block:
+# myotherservice.com {
+#     reverse_proxy localhost:4000
+# }

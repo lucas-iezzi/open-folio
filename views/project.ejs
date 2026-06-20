@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <title><%= project.title %> — Lucas Iezzi</title>
+  <meta name="description" content="<%= project.subtitle || project.title %>">
+</head>
+<body>
+  <%- include('partials/nav') %>
+
+  <main>
+
+    <!-- Project header: title + subtitle -->
+    <div class="container">
+      <header class="project-header">
+        <h1 class="project-title"><%= project.pageTitle || project.title %></h1>
+        <% if (project.subtitle) { %>
+        <p class="project-subtitle"><%= project.subtitle %></p>
+        <% } %>
+      </header>
+    </div>
+
+    <!-- Sections -->
+    <% project.sections.forEach(function(section) { %>
+    <div class="container">
+      <section class="project-section">
+
+        <% if (section.heading) { %>
+        <h2 class="project-section__heading"><%= section.heading %></h2>
+        <% } %>
+
+        <% if (section.body) { %>
+        <div class="project-section__body"><%- section.body.replace(/\n/g, '<br>') %></div>
+        <% } %>
+
+        <% if (section.images && section.images.length > 0) { %>
+        <div class="project-section-images">
+          <% section.images.forEach(function(img) { %>
+          <% if (img.src) { %>
+          <img
+            src="<%= img.src %>"
+            alt="<%= img.alt || section.heading || project.title %>"
+            loading="lazy"
+            decoding="async"
+          >
+          <% } %>
+          <% }); %>
+        </div>
+        <% } %>
+
+      </section>
+    </div>
+    <% }); %>
+
+  </main>
+
+  <%- include('partials/footer') %>
+  <script src="/js/main.js" defer></script>
+</body>
+</html>
