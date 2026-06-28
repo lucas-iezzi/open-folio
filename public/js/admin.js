@@ -31,6 +31,13 @@
   initDashboard();
   initProjectForm();
 
+  function countryFlag(code) {
+    if (!code || code.length !== 2) return '';
+    try {
+      return String.fromCodePoint(...[...code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+    } catch { return ''; }
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // DASHBOARD
   // ════════════════════════════════════════════════════════════════════
@@ -39,6 +46,43 @@
     initProjectDrag();
     initDeleteButtons();
     initImportExport();
+    initToggleVisibility();
+    initActivityGeo();
+  }
+
+  function initActivityGeo() {
+    const activityTab = document.querySelector('.admin-tab[data-tab="activity"]');
+    if (!activityTab) return;
+    let loaded = false;
+    activityTab.addEventListener('click', () => {
+      if (loaded) return;
+      loaded = true;
+      fetchGeoData();
+    });
+  }
+
+  async function fetchGeoData() {
+    const geoCells = document.querySelectorAll('.visit-geo[data-ip]');
+    const ips = [...new Set([...geoCells].map(el => el.dataset.ip).filter(Boolean))];
+    if (!ips.length) {
+      geoCells.forEach(el => { el.textContent = '—'; });
+      return;
+    }
+    try {
+      const res  = await fetch('/admin/geo?ips=' + ips.map(encodeURIComponent).join(','));
+      const data = await res.json();
+      document.querySelectorAll('.visit-geo[data-ip]').forEach(el => {
+        const geo = data[el.dataset.ip];
+        if (!geo || (!geo.country && !geo.city)) {
+          el.textContent = '—';
+        } else {
+          const flag = countryFlag(geo.country_code);
+          el.textContent = [flag, geo.city, geo.country].filter(Boolean).join(' ');
+        }
+      });
+    } catch {
+      geoCells.forEach(el => { el.textContent = '—'; });
+    }
   }
 
   // ── Tab switching ────────────────────────────────────────────────
@@ -153,37 +197,64 @@
     });
   }
 
+  // ── Toggle project visibility ────────────────────────────────────
+  function initToggleVisibility() {
+    document.querySelectorAll('.toggle-visibility-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const slug = btn.dataset.slug;
+        try {
+          const data = await apiFetch(`/admin/projects/${encodeURIComponent(slug)}/toggle-visibility`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const visible = data.visible === 1;
+          btn.dataset.visible = visible ? '1' : '0';
+          btn.textContent = visible ? 'Hide' : 'Show';
+          btn.title = visible ? 'Hide from site' : 'Show on site';
+          btn.setAttribute('aria-label', (visible ? 'Hide ' : 'Show ') + slug);
+          const item = btn.closest('.project-list-item');
+          item?.classList.toggle('is-hidden', !visible);
+        } catch (err) {
+          alert('Could not update visibility: ' + err.message);
+        }
+      });
+    });
+  }
+
   // ── Import / Export ──────────────────────────────────────────────
   function initImportExport() {
     const importBtn    = document.getElementById('import-btn');
-    const importInput  = document.getElementById('import-file-input');
     const importStatus = document.getElementById('import-status');
 
-    importBtn?.addEventListener('click', () => importInput?.click());
-
-    importInput?.addEventListener('change', async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      setImportStatus('Reading…', '');
-      try {
-        const text = await file.text();
-        let data = JSON.parse(text);
-        if (!Array.isArray(data)) data = [data];
-        setImportStatus(`Importing ${data.length} project(s)…`, '');
-        const result = await apiFetch('/admin/projects/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
-        setImportStatus(
-          `✓ ${result.created} created, ${result.updated} updated — reloading…`,
-          'var(--success)'
-        );
-        setTimeout(() => location.reload(), 1400);
-      } catch (err) {
-        setImportStatus('Import failed: ' + err.message, 'var(--danger)');
-      }
-      e.target.value = '';
+    importBtn?.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setImportStatus('Reading…', '');
+        try {
+          const text = await file.text();
+          let data = JSON.parse(text);
+          if (!Array.isArray(data)) data = [data];
+          setImportStatus(`Importing ${data.length} project(s)…`, '');
+          const result = await apiFetch('/admin/projects/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+          });
+          setImportStatus(
+            `✓ ${result.created} created, ${result.updated} updated — reloading…`,
+            'var(--success)'
+          );
+          setTimeout(() => location.reload(), 1400);
+        } catch (err) {
+          setImportStatus('Import failed: ' + err.message, 'var(--danger)');
+        }
+      });
+      input.click();
     });
 
     function setImportStatus(msg, color) {
@@ -310,6 +381,19 @@
           </div>
           <div class="field">
             <label>Images</label>
+            <div class="sec-cols-row">
+              <label class="sec-cols-label" for="sec-cols-${esc(sec.id)}">Columns per row</label>
+              <input
+                type="number"
+                id="sec-cols-${esc(sec.id)}"
+                class="sec-cols"
+                value="${sec.cols || 0}"
+                min="0"
+                max="20"
+                aria-label="Images per row (0 = all in one row)"
+              >
+              <span class="sec-cols-hint">0 = all in one row</span>
+            </div>
             <div class="section-images">
               ${sec.images.map(img => buildImageThumb(img.src, img.alt)).join('')}
               <button type="button" class="section-image-upload-btn" aria-label="Add image">
@@ -326,6 +410,9 @@
       });
       card.querySelector('.sec-body').addEventListener('input', e => {
         sections[getSectionIndex(card)].body = e.target.value;
+      });
+      card.querySelector('.sec-cols').addEventListener('input', e => {
+        sections[getSectionIndex(card)].cols = Math.max(0, parseInt(e.target.value, 10) || 0);
       });
 
       card.querySelector('.section-delete-btn').addEventListener('click', () => {
@@ -464,7 +551,7 @@
 
     // ── Add section ─────────────────────────────────────────────────
     addSectionBtn?.addEventListener('click', () => {
-      sections.push({ id: crypto.randomUUID(), heading: '', body: '', images: [] });
+      sections.push({ id: crypto.randomUUID(), heading: '', body: '', cols: 0, images: [] });
       renderSections();
       sectionsWrap.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       sectionsWrap.lastElementChild?.querySelector('input')?.focus();
@@ -492,6 +579,7 @@
         if (sec) {
           sec.heading = card.querySelector('.sec-heading')?.value || '';
           sec.body    = card.querySelector('.sec-body')?.value    || '';
+          sec.cols    = Math.max(0, parseInt(card.querySelector('.sec-cols')?.value || '0', 10) || 0);
         }
       });
 

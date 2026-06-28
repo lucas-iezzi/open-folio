@@ -25,17 +25,22 @@
   <div class="admin-container">
 
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
-      <button class="admin-tab is-active" role="tab" aria-selected="true" aria-controls="tab-projects" data-tab="projects">Projects</button>
+      <button class="admin-tab is-active" role="tab" aria-selected="true"  aria-controls="tab-projects" data-tab="projects">Portfolio</button>
+      <button class="admin-tab"            role="tab" aria-selected="false" aria-controls="tab-activity" data-tab="activity">Activity</button>
     </div>
 
+    <!-- ══ PROJECTS TAB ══════════════════════════════════════════════ -->
     <div class="admin-tab-panel is-active" id="tab-projects" role="tabpanel">
 
       <div class="admin-page-header">
         <h1 class="admin-page-title">Projects</h1>
         <div class="admin-page-header-actions">
-          <a href="/admin/projects/export" class="btn btn-secondary btn-sm">↓ Export JSON</a>
-          <button type="button" id="import-btn" class="btn btn-secondary btn-sm">↑ Import JSON</button>
-          <input type="file" id="import-file-input" accept=".json,application/json" style="display:none" aria-hidden="true">
+          <button type="button" id="import-btn" class="btn btn-secondary">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M7 2v10M2 7h10"/>
+            </svg>
+            Import project
+          </button>
           <a href="/admin/projects/new" class="btn btn-primary">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M7 2v10M2 7h10"/>
@@ -56,14 +61,14 @@
       </div>
       <% } else { %>
 
-      <p style="font-size:13px; color:var(--muted); margin-bottom:16px;">
+      <p style="font-size:13px; color:var(--muted); margin-bottom:40px;">
         Drag <span aria-hidden="true">⠿</span> to reorder. Order controls the homepage grid.
       </p>
 
       <div class="project-list" id="project-list" role="list">
         <% projects.forEach(function(project) { %>
         <div
-          class="project-list-item"
+          class="project-list-item<%= project.visible === false ? ' is-hidden' : '' %>"
           data-slug="<%= project.slug %>"
           role="listitem"
           aria-label="<%= project.title %>"
@@ -105,6 +110,15 @@
 
             <button
               type="button"
+              class="btn btn-secondary btn-sm toggle-visibility-btn"
+              data-slug="<%= project.slug %>"
+              data-visible="<%= project.visible === false ? '0' : '1' %>"
+              aria-label="<%= project.visible === false ? 'Show' : 'Hide' %> <%= project.title %>"
+              title="<%= project.visible === false ? 'Show on site' : 'Hide from site' %>"
+            ><%= project.visible === false ? 'Show' : 'Hide' %></button>
+
+            <button
+              type="button"
               class="btn btn-danger btn-sm delete-project-btn"
               data-slug="<%= project.slug %>"
               data-title="<%= project.title %>"
@@ -118,6 +132,117 @@
       <% } %>
 
     </div><!-- /tab-projects -->
+
+    <!-- ══ ACTIVITY TAB ══════════════════════════════════════════════ -->
+    <div class="admin-tab-panel" id="tab-activity" role="tabpanel">
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">Activity</h1>
+        <span style="font-size:13px; color:var(--muted);">Public page views &amp; API calls · IPs are hashed, not stored</span>
+      </div>
+
+      <!-- Summary cards -->
+      <div class="activity-summary">
+        <div class="activity-card">
+          <div class="activity-card-value"><%= activity.totals.today %></div>
+          <div class="activity-card-label">Today</div>
+        </div>
+        <div class="activity-card">
+          <div class="activity-card-value"><%= activity.totals.week %></div>
+          <div class="activity-card-label">Last 7 days</div>
+        </div>
+        <div class="activity-card">
+          <div class="activity-card-value"><%= activity.totals.month %></div>
+          <div class="activity-card-label">Last 30 days</div>
+        </div>
+        <div class="activity-card">
+          <div class="activity-card-value"><%= activity.totals.all %></div>
+          <div class="activity-card-label">All time</div>
+        </div>
+      </div>
+
+      <div class="activity-cols">
+
+        <!-- Top pages -->
+        <div class="activity-section">
+          <div class="activity-section-title">Top pages</div>
+          <% if (activity.topPages.length === 0) { %>
+          <p style="font-size:13px; color:var(--muted); padding:12px 0;">No page views recorded yet.</p>
+          <% } else { %>
+          <table class="activity-table">
+            <thead><tr><th>Path</th><th>Views</th></tr></thead>
+            <tbody>
+              <% activity.topPages.forEach(function(row) { %>
+              <tr>
+                <td><a href="<%= row.path %>" target="_blank" rel="noopener noreferrer" style="color:var(--text);"><%= row.path %></a></td>
+                <td><%= row.views %></td>
+              </tr>
+              <% }); %>
+            </tbody>
+          </table>
+          <% } %>
+        </div>
+
+        <!-- Top API calls -->
+        <div class="activity-section">
+          <div class="activity-section-title">Top API calls</div>
+          <% if (activity.topApi.length === 0) { %>
+          <p style="font-size:13px; color:var(--muted); padding:12px 0;">No API calls recorded yet.</p>
+          <% } else { %>
+          <table class="activity-table">
+            <thead><tr><th>Endpoint</th><th>Calls</th></tr></thead>
+            <tbody>
+              <% activity.topApi.forEach(function(row) { %>
+              <tr>
+                <td style="font-family:monospace; font-size:12px;"><%= row.path %></td>
+                <td><%= row.views %></td>
+              </tr>
+              <% }); %>
+            </tbody>
+          </table>
+          <% } %>
+        </div>
+
+      </div>
+
+      <!-- Recent visits -->
+      <div class="activity-section" style="margin-top:24px;">
+        <div class="activity-section-title">Recent visits</div>
+        <% if (activity.recent.length === 0) { %>
+        <p style="font-size:13px; color:var(--muted); padding:12px 0;">No visits recorded yet. Browse the public site to generate data.</p>
+        <% } else { %>
+        <div style="overflow-x:auto;">
+        <table class="activity-table activity-table--recent">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>Path</th>
+              <th>IP</th>
+              <th>Location</th>
+              <th>Referrer</th>
+              <th>User agent</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% activity.recent.forEach(function(row) { %>
+            <tr>
+              <td class="activity-ts" data-ts="<%= row.ts %>"><%= new Date(row.ts).toISOString().replace('T',' ').slice(0,19) %> UTC</td>
+              <td><span class="activity-badge activity-badge--<%= row.type %>"><%= row.type %></span></td>
+              <td style="font-family:monospace; font-size:12px;"><%= row.path %></td>
+              <td class="visit-ip" data-ip="<%= row.ip %>" style="font-family:monospace; font-size:12px;"><%= row.ip || '—' %></td>
+              <td class="visit-geo" data-ip="<%= row.ip %>" style="font-size:12px; color:var(--muted);">…</td>
+              <td style="font-size:12px; color:var(--muted); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= row.referrer %>"><%= row.referrer || '—' %></td>
+              <td style="font-size:12px; color:var(--muted); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= row.ua %>"><%= row.ua || '—' %></td>
+            </tr>
+            <% }); %>
+          </tbody>
+        </table>
+        </div>
+        <% } %>
+      </div>
+
+    </div><!-- /tab-activity -->
 
   </div>
 

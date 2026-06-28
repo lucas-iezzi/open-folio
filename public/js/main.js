@@ -67,6 +67,20 @@
 
   document.querySelectorAll('.project-section-images').forEach(applyJustifiedRow);
 
+  // ── Secret admin shortcut: type "admin" anywhere ────────────
+  (function () {
+    var seq = '';
+    var target = 'admin';
+    document.addEventListener('keydown', function (e) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      seq = (seq + e.key).slice(-target.length);
+      if (seq === target) {
+        seq = '';
+        window.location.href = '/admin/login';
+      }
+    });
+  }());
+
   // ── Secret admin shortcut: click left logo 5× in 1.5s ───────
   // Count persists via sessionStorage so it survives page navigations.
   // The 5th click is intercepted; prior clicks follow the normal href.

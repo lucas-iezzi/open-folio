@@ -37,14 +37,46 @@ db.exec(`
     thumbnailAlt TEXT NOT NULL DEFAULT '',
     sort_order   INTEGER NOT NULL DEFAULT 0,
     sections     TEXT NOT NULL DEFAULT '[]'
-  )
+  );
+
+  CREATE TABLE IF NOT EXISTS visits (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       INTEGER NOT NULL,
+    path     TEXT    NOT NULL,
+    type     TEXT    NOT NULL DEFAULT 'page',
+    ip_hash  TEXT    NOT NULL DEFAULT '',
+    ip       TEXT    NOT NULL DEFAULT '',
+    referrer TEXT    NOT NULL DEFAULT '',
+    ua       TEXT    NOT NULL DEFAULT ''
+  );
+
+  CREATE INDEX IF NOT EXISTS visits_ts   ON visits(ts);
+  CREATE INDEX IF NOT EXISTS visits_path ON visits(path);
+
+  CREATE TABLE IF NOT EXISTS geo_cache (
+    ip      TEXT    PRIMARY KEY,
+    country TEXT    NOT NULL DEFAULT '',
+    country_code TEXT NOT NULL DEFAULT '',
+    city    TEXT    NOT NULL DEFAULT '',
+    org     TEXT    NOT NULL DEFAULT '',
+    ts      INTEGER NOT NULL DEFAULT 0
+  );
 `);
 
-// Migration: add pageTitle column to existing DBs
+// Migrations for existing DBs
 {
   const cols = db.pragma('table_info(projects)').map(c => c.name);
   if (!cols.includes('pageTitle')) {
     db.exec(`ALTER TABLE projects ADD COLUMN pageTitle TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.includes('visible')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`);
+  }
+}
+{
+  const vcols = db.pragma('table_info(visits)').map(c => c.name);
+  if (!vcols.includes('ip')) {
+    db.exec(`ALTER TABLE visits ADD COLUMN ip TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -57,6 +89,7 @@ function rowToProject(row) {
     thumbnail:    row.thumbnail,
     thumbnailAlt: row.thumbnailAlt,
     order:        row.sort_order,
+    visible:      row.visible !== 0,
     sections:     JSON.parse(row.sections || '[]'),
   };
 }
@@ -170,10 +203,11 @@ function requireAuth(req, res, next) {
 // ── Data helpers ──────────────────────────────────────────────────────────────
 const _selectAll    = db.prepare('SELECT * FROM projects');
 const _selectSorted = db.prepare('SELECT * FROM projects ORDER BY sort_order ASC');
+const _selectPublic = db.prepare('SELECT * FROM projects WHERE visible = 1 ORDER BY sort_order ASC');
 const _deleteAll    = db.prepare('DELETE FROM projects');
 const _upsert       = db.prepare(`
-  INSERT INTO projects (slug, title, subtitle, pageTitle, thumbnail, thumbnailAlt, sort_order, sections)
-  VALUES (@slug, @title, @subtitle, @pageTitle, @thumbnail, @thumbnailAlt, @sort_order, @sections)
+  INSERT INTO projects (slug, title, subtitle, pageTitle, thumbnail, thumbnailAlt, sort_order, visible, sections)
+  VALUES (@slug, @title, @subtitle, @pageTitle, @thumbnail, @thumbnailAlt, @sort_order, @visible, @sections)
   ON CONFLICT(slug) DO UPDATE SET
     title        = excluded.title,
     subtitle     = excluded.subtitle,
@@ -181,6 +215,7 @@ const _upsert       = db.prepare(`
     thumbnail    = excluded.thumbnail,
     thumbnailAlt = excluded.thumbnailAlt,
     sort_order   = excluded.sort_order,
+    visible      = excluded.visible,
     sections     = excluded.sections
 `);
 
@@ -200,6 +235,7 @@ function saveProjects(projects) {
         thumbnail:    p.thumbnail    || '',
         thumbnailAlt: p.thumbnailAlt || '',
         sort_order:   p.order        ?? 0,
+        visible:      p.visible === false ? 0 : 1,
         sections:     JSON.stringify(p.sections || []),
       });
     }
@@ -208,6 +244,64 @@ function saveProjects(projects) {
 
 function sortedProjects() {
   return _selectSorted.all().map(rowToProject);
+}
+
+function publicProjects() {
+  return _selectPublic.all().map(rowToProject);
+}
+
+// ── Visit tracking ────────────────────────────────────────────────────────────
+const _insertVisit = db.prepare(`
+  INSERT INTO visits (ts, path, type, ip_hash, ip, referrer, ua)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+
+function recordVisit(req, type = 'page') {
+  try {
+    const ip   = req.ip || req.socket?.remoteAddress || '';
+    const hash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
+    const ref  = (req.headers['referer'] || req.headers['referrer'] || '').slice(0, 200);
+    const ua   = (req.headers['user-agent'] || '').slice(0, 200);
+    _insertVisit.run(Date.now(), req.path, type, hash, ip, ref, ua);
+  } catch { /* never let tracking errors surface to users */ }
+}
+
+function getActivityStats() {
+  const now    = Date.now();
+  const DAY    = 86400000;
+  const WEEK   = 7  * DAY;
+  const MONTH  = 30 * DAY;
+
+  const countSince = db.prepare('SELECT COUNT(*) as n FROM visits WHERE ts >= ?');
+
+  const topPages = db.prepare(`
+    SELECT path, COUNT(*) as views
+    FROM visits WHERE type = 'page'
+    GROUP BY path ORDER BY views DESC LIMIT 20
+  `).all();
+
+  const topApi = db.prepare(`
+    SELECT path, COUNT(*) as views
+    FROM visits WHERE type = 'api'
+    GROUP BY path ORDER BY views DESC LIMIT 10
+  `).all();
+
+  const recent = db.prepare(`
+    SELECT ts, path, type, ip, referrer, ua
+    FROM visits ORDER BY ts DESC LIMIT 100
+  `).all();
+
+  return {
+    totals: {
+      today: countSince.get(now - DAY).n,
+      week:  countSince.get(now - WEEK).n,
+      month: countSince.get(now - MONTH).n,
+      all:   countSince.get(0).n,
+    },
+    topPages,
+    topApi,
+    recent,
+  };
 }
 
 // Sanitize a slug: lowercase alphanumeric + hyphens only, no leading/trailing hyphens
@@ -269,13 +363,15 @@ app.get('/robots.txt', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/', (req, res) => {
-  res.render('index', { projects: sortedProjects() });
+  recordVisit(req, 'page');
+  res.render('index', { projects: publicProjects() });
 });
 
 app.get('/projects/:slug', (req, res, next) => {
   const slug = sanitizeSlug(req.params.slug);
   const project = loadProjects().find(p => p.slug === slug);
   if (!project) return next(); // fall through to 404
+  recordVisit(req, 'page');
   res.render('project', { project });
 });
 
@@ -385,6 +481,7 @@ app.post('/admin/projects/import', requireAuth, requireCsrf, (req, res) => {
 app.get('/admin/dashboard', requireAuth, (req, res) => {
   res.render('admin/index', {
     projects: sortedProjects(),
+    activity: getActivityStats(),
     csrfToken: getCsrfToken(req),
     flash: req.query.msg || null,
   });
@@ -480,6 +577,16 @@ app.post('/admin/projects/:slug/delete', requireAuth, requireCsrf, (req, res) =>
   res.json({ ok: true });
 });
 
+// ── Toggle project visibility ─────────────────────────────────────────────────
+app.post('/admin/projects/:slug/toggle-visibility', requireAuth, requireCsrf, (req, res) => {
+  const slug = sanitizeSlug(req.params.slug);
+  const row  = db.prepare('SELECT visible FROM projects WHERE slug = ?').get(slug);
+  if (!row) return res.status(404).json({ error: 'Not found.' });
+  const newVisible = row.visible === 0 ? 1 : 0;
+  db.prepare('UPDATE projects SET visible = ? WHERE slug = ?').run(newVisible, slug);
+  res.json({ ok: true, visible: newVisible });
+});
+
 // ── Reorder projects ──────────────────────────────────────────────────────────
 app.post('/admin/projects/reorder', requireAuth, requireCsrf, (req, res) => {
   const { slugs } = req.body;
@@ -535,6 +642,64 @@ app.post('/admin/image/delete', requireAuth, requireCsrf, (req, res) => {
   }
 });
 
+// ── Geo lookup (admin only, results cached in DB) ─────────────────────────────
+const _geoGet    = db.prepare('SELECT * FROM geo_cache WHERE ip = ?');
+const _geoUpsert = db.prepare(`
+  INSERT INTO geo_cache (ip, country, country_code, city, org, ts)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(ip) DO UPDATE SET
+    country      = excluded.country,
+    country_code = excluded.country_code,
+    city         = excluded.city,
+    org          = excluded.org,
+    ts           = excluded.ts
+`);
+
+app.get('/admin/geo', requireAuth, async (req, res) => {
+  const ips = (req.query.ips || '').split(',')
+    .map(s => s.trim())
+    .filter(s => s && /^[\d.a-fA-F:]+$/.test(s))
+    .slice(0, 50);
+
+  if (!ips.length) return res.json({});
+
+  const result = {};
+  const toFetch = [];
+
+  for (const ip of ips) {
+    const cached = _geoGet.get(ip);
+    if (cached) {
+      result[ip] = { country: cached.country, country_code: cached.country_code, city: cached.city, org: cached.org };
+    } else {
+      toFetch.push(ip);
+    }
+  }
+
+  if (toFetch.length) {
+    try {
+      const resp = await fetch('http://ip-api.com/batch?fields=query,status,country,countryCode,city,org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(toFetch.map(ip => ({ query: ip }))),
+        signal: AbortSignal.timeout(6000),
+      });
+      const data = await resp.json();
+      for (const entry of data) {
+        const ip  = entry.query;
+        const geo = entry.status === 'success'
+          ? { country: entry.country || '', country_code: entry.countryCode || '', city: entry.city || '', org: entry.org || '' }
+          : { country: '', country_code: '', city: '', org: '' };
+        _geoUpsert.run(ip, geo.country, geo.country_code, geo.city, geo.org, Date.now());
+        result[ip] = geo;
+      }
+    } catch {
+      for (const ip of toFetch) result[ip] = null;
+    }
+  }
+
+  res.json(result);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // REST API  (bearer-token auth — no session, no CSRF)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -550,6 +715,7 @@ function requireApiKey(req, res, next) {
   if (!key || key !== process.env.API_KEY) {
     return res.status(401).json({ error: 'Unauthorized.' });
   }
+  recordVisit(req, 'api');
   next();
 }
 
@@ -633,7 +799,7 @@ app.delete('/api/v1/projects/:slug', requireApiKey, (req, res) => {
 function validateImagePath(p) {
   if (!p || typeof p !== 'string') return '';
   const clean = p.trim();
-  if (/^\/images\/projects\/[a-z0-9-]+\/[a-z0-9_.-]+\.(jpg|jpeg|png|gif|webp)$/i.test(clean)) {
+  if (/^\/images\/projects\/[a-z0-9-]+\/[a-z0-9_.()+-]+\.(jpg|jpeg|png|gif|webp)$/i.test(clean)) {
     return clean;
   }
   return '';
@@ -645,6 +811,7 @@ function sanitizeSections(sections) {
     id: typeof s.id === 'string' ? s.id.slice(0, 50) : crypto.randomUUID(),
     heading: (s.heading || '').slice(0, 200),
     body: (s.body || '').slice(0, 20000),
+    cols: (typeof s.cols === 'number' && s.cols >= 0) ? Math.min(Math.floor(s.cols), 20) : 0,
     images: Array.isArray(s.images)
       ? s.images.slice(0, 30).map(img => ({
           src: validateImagePath(img.src),

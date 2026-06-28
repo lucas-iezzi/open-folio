@@ -53,7 +53,7 @@ a {
   --font-weight-bold:   700;
 
   /* Layout */
-  --nav-height:      80px;
+  --nav-height:      100px;
   --container-max:   1400px;
   --content-max:     960px;
   --gap-sm:          16px;
@@ -82,10 +82,10 @@ a {
   --d-sect-head-size:     22px;
   --d-sect-head-weight:   700;
   --d-body-size:          16px;
-  --d-hero-top:           20px;
+  --d-hero-top:           44px;
   --d-hero-bot:           40px;
   --d-proj-top:           40px;
-  --d-proj-header-mb:     48px;
+  --d-proj-header-mb:     0px;
   --d-section-gap:        48px;
 }
 
@@ -158,15 +158,17 @@ main { flex: 1; }
 
 /* Logo images */
 .nav-brand-icon img {
-  height: 40px;
+  height: 52px;
   width: auto;
   display: block;
+  margin-top: 22px;
 }
 
 .nav-brand-wordmark img {
-  height: 40px;
+  height: 52px;
   width: auto;
   display: block;
+  margin-top: 22px;
 }
 
 /* Logo placeholders (shown while images load / if missing) */
@@ -402,7 +404,7 @@ main { flex: 1; }
 
 /* Project header */
 .project-header {
-  margin-top: 40px;
+  margin-top: var(--d-hero-top);
   margin-bottom: var(--d-proj-header-mb);
 }
 
@@ -443,7 +445,7 @@ main { flex: 1; }
   font-weight: 500;
   line-height: 2rem;
   margin-bottom: 10px;
-  padding-top: 40px;
+  padding-top: 42px;
 }
 
 .project-section__body {
@@ -454,7 +456,7 @@ main { flex: 1; }
 
 /* Section images — inside container, same width as text */
 .project-section-images {
-  margin-top: 16px;
+  margin-top: 22px;
   display: flex;
   gap: 0;
 }
@@ -474,6 +476,11 @@ main { flex: 1; }
 .project-section-images:has(img:only-child) img {
   flex: none;
   width: 100%;
+}
+
+/* Consecutive rows in a multi-row section: flush together */
+.project-section-images + .project-section-images {
+  margin-top: 0;
 }
 
 /* ── Footer ─────────────────────────────────────────────────── */
