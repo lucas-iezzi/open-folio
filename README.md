@@ -51,7 +51,7 @@ Prompts you to push (local → server) or pull (server → local).
 
 ## Create a project via the API
 
-Use `templates/project.json` as the schema. Fill it in and POST it:
+Use `project.template.json` as the schema. Fill it in and POST it:
 
 ```bash
 API_KEY=$(grep '^API_KEY=' .env | cut -d= -f2)
