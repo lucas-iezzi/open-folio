@@ -20,6 +20,7 @@ if (!process.env.SESSION_SECRET || !process.env.ADMIN_PASSWORD_HASH) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const IMAGES_BASE = path.join(__dirname, 'public', 'images', 'projects');

@@ -33,7 +33,7 @@ async function main() {
   const apiKey = crypto.randomBytes(32).toString('hex');
   const envContent = [
     `PORT=3000`,
-    `NODE_ENV=development`,
+    `NODE_ENV=production`,
     `SESSION_SECRET=${secret}`,
     `ADMIN_PASSWORD_HASH=${hash}`,
     `API_KEY=${apiKey}`,
