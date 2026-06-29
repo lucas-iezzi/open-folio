@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head') %>
+  <meta name="csrf-token" content="<%= csrfToken %>">
+  <meta name="studio-temp-id" content="<%= tempId %>">
+  <meta name="studio-mode" content="<%= typeof mode !== 'undefined' ? mode : 'generate' %>">
+  <meta name="studio-edit-slug" content="<%= typeof editSlug !== 'undefined' ? editSlug : '' %>">
+  <meta name="studio-has-draft" content="<%= typeof hasDraft !== 'undefined' && hasDraft ? '1' : '0' %>">
+  <% if (typeof initialProjectJson !== 'undefined') { %>
+  <script type="application/json" id="studio-initial-data"><%- initialProjectJson %></script>
+  <% } %>
+  <title><%= typeof mode !== 'undefined' && mode === 'edit' ? 'Edit Project — Admin' : 'Generate New Project — Admin' %></title>
+  <style>
+    /* Prevent body/page scroll — only .studio-wrap or .studio-form-scroll handle scrolling */
+    html, body { overflow: hidden; height: 100%; }
+  </style>
+</head>
+<body>
+
+  <nav class="admin-nav" role="navigation">
+    <div class="admin-nav-inner">
+      <a href="/admin/dashboard" class="admin-nav-brand-icon">
+        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <span class="admin-nav-label">admin</span>
+      </a>
+      <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
+        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+      </a>
+      <div class="admin-nav-actions">
+        <a href="/admin/dashboard" class="admin-nav-link">← Dashboard</a>
+        <a href="/" class="admin-nav-link" target="_blank" rel="noopener noreferrer">View site ↗</a>
+        <a href="/admin/logout" class="admin-nav-link">Sign out</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="studio-wrap" id="studio-wrap">
+
+    <!-- ══ PRE-GEN: scrollable admin-style form ════════════════════════ -->
+    <div class="studio-form" id="studio-form">
+      <div class="studio-form-scroll">
+
+        <div class="admin-page-header">
+          <% if (typeof mode !== 'undefined' && mode === 'edit') { %>
+          <h1 class="admin-page-title">Edit Project</h1>
+          <% } else { %>
+          <h1 class="admin-page-title">Generate New Project</h1>
+          <% } %>
+        </div>
+
+        <!-- Card: Description -->
+        <div class="form-card">
+          <div class="form-card-title">Project description</div>
+          <div class="field">
+            <label for="studio-description">Tell Claude about your project <span class="label-hint">what was it, how did you build it, what were the outcomes — more detail = better draft</span></label>
+            <textarea
+              id="studio-description"
+              class="studio-textarea studio-textarea--large"
+              rows="14"
+              placeholder="Describe your project in as much detail as you want. What problem did it solve? What was your process? What materials or tools did you use? What were the outcomes?"></textarea>
+          </div>
+        </div>
+
+        <!-- Card: Files -->
+        <div class="form-card">
+          <div class="form-card-title">Files <span class="form-card-title-note">images · .txt .md .csv .json · max 20 MB each</span></div>
+          <div id="studio-drop-zone" class="studio-drop-zone" role="button" tabindex="0" aria-label="Upload files">
+            <div class="studio-drop-zone-icon">↑</div>
+            <div>Drop files here or <span class="studio-browse-link">browse</span></div>
+          </div>
+          <!-- Simple pre-gen file list (no tag editing) -->
+          <div id="pregen-file-list" class="studio-pregen-file-list"></div>
+          <div id="studio-upload-status" class="studio-status"></div>
+        </div>
+
+        <!-- Card: Model + Generate -->
+        <div class="form-card studio-generate-card">
+          <div class="studio-generate-row">
+            <div class="studio-model-inline">
+              <label class="studio-inline-label" for="studio-model">Model</label>
+              <select id="studio-provider" class="studio-select" style="display:none"><option value="anthropic">Anthropic</option></select>
+              <select id="studio-model" class="studio-select">
+                <option value="claude-sonnet-4-6">Sonnet 4.6 — fast</option>
+                <option value="claude-opus-4-8">Opus 4.8 — quality</option>
+              </select>
+            </div>
+            <button id="studio-generate-btn" class="btn btn-primary studio-generate-btn-inline">Generate Project</button>
+          </div>
+          <div id="studio-generate-status" class="studio-status" style="margin-top:10px;"></div>
+        </div>
+
+      </div><!-- /studio-form-scroll -->
+    </div><!-- /studio-form -->
+
+    <!-- ══ SIDEBAR: three accordion sections (post-gen only) ══════════ -->
+    <div class="studio-sidebar" id="studio-sidebar" style="display:none;">
+
+      <div class="studio-collapse-bar">
+        <button class="studio-collapse-btn" id="studio-collapse-btn" title="Toggle AI sidebar">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3L6 8l4 5"/></svg>
+          <span class="studio-collapse-label">AI</span>
+        </button>
+      </div>
+
+      <!-- ── Section 1: Files ── -->
+      <div class="studio-section is-closed" id="section-files">
+        <div class="studio-section-header" data-section="files" role="button" tabindex="0" aria-controls="section-files-body">
+          <div class="studio-section-header-label">
+            <span class="studio-label">Files</span>
+            <span class="studio-label-note" id="studio-file-count-note"></span>
+          </div>
+          <span class="studio-section-chevron" aria-hidden="true">▾</span>
+        </div>
+        <div class="studio-section-body" id="section-files-body">
+          <!-- Compact upload trigger (no full drop zone in sidebar) -->
+          <button id="sidebar-upload-btn" class="btn btn-secondary studio-full-btn" style="flex-shrink:0;">+ Add files</button>
+          <div id="studio-image-grid" class="studio-image-grid"></div>
+          <div id="studio-upload-status-sidebar" class="studio-status"></div>
+          <div id="studio-tag-save-status" class="studio-status" style="font-size:11px;min-height:12px;"></div>
+        </div>
+      </div>
+
+      <!-- ── Section 2: Chat ── -->
+      <div class="studio-section <%= (typeof mode !== 'undefined' && mode === 'edit') ? 'is-closed' : 'is-open' %>" id="section-chat">
+        <div class="studio-section-header" data-section="chat" role="button" tabindex="0" aria-controls="section-chat-body">
+          <div class="studio-section-header-label">
+            <span class="studio-label">Chat</span>
+          </div>
+          <span class="studio-section-chevron" aria-hidden="true">▾</span>
+        </div>
+        <div class="studio-section-body" id="section-chat-body">
+          <div class="studio-chat-history" id="studio-chat-history" aria-live="polite"></div>
+          <div class="studio-chat-input-row">
+            <textarea
+              id="studio-chat-input"
+              class="studio-chat-input"
+              placeholder="Ask Claude to change something…"
+              rows="2"
+              aria-label="Chat message"></textarea>
+            <button id="studio-chat-send" class="studio-chat-send-btn" aria-label="Send">↑</button>
+          </div>
+          <div id="studio-chat-status" class="studio-status" style="margin-top:4px;font-size:12px;"></div>
+        </div>
+      </div>
+
+      <!-- ── Section 3: Save & Publish ── -->
+      <div class="studio-section <%= (typeof mode !== 'undefined' && mode === 'edit') ? 'is-open' : 'is-closed' %>" id="section-publish">
+        <div class="studio-section-header" data-section="publish" role="button" tabindex="0" aria-controls="section-publish-body">
+          <div class="studio-section-header-label">
+            <span class="studio-label">Save &amp; Publish</span>
+          </div>
+          <span class="studio-section-chevron" aria-hidden="true">▾</span>
+        </div>
+        <div class="studio-section-body" id="section-publish-body">
+          <div>
+            <label for="studio-title" class="studio-input-label">Homepage card title</label>
+            <input type="text" id="studio-title" class="studio-input" placeholder="Short project name" autocomplete="off">
+          </div>
+          <div>
+            <label for="studio-slug" class="studio-input-label">URL slug — /projects/<span id="studio-slug-preview">my-project</span></label>
+            <input type="text" id="studio-slug" class="studio-input" placeholder="my-project" autocomplete="off" spellcheck="false">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+            <button id="studio-discard-btn" class="btn btn-secondary">Discard</button>
+            <button id="studio-draft-btn" class="btn btn-secondary">Save Draft</button>
+          </div>
+          <button id="studio-publish-btn" class="btn btn-primary studio-full-btn" style="margin-top:0;">Publish →</button>
+          <div id="studio-publish-status" class="studio-status"></div>
+        </div>
+      </div>
+
+    </div><!-- /studio-sidebar -->
+
+    <!-- ══ PREVIEW (post-gen only) ════════════════════════════════════ -->
+    <div class="studio-preview" id="studio-preview">
+      <iframe
+        id="studio-preview-frame"
+        class="studio-preview-frame"
+        title="Project page preview"
+        sandbox="allow-same-origin allow-scripts"
+      ></iframe>
+      <div id="studio-loading" class="studio-loading" aria-live="polite">
+        <div class="studio-spinner"></div>
+        <div id="studio-loading-text">Generating…</div>
+      </div>
+    </div>
+
+  </div><!-- /studio-wrap -->
+
+  <script src="/js/studio.js" defer></script>
+</body>
+</html>

@@ -17,6 +17,7 @@
       </a>
       <div class="admin-nav-actions">
         <a href="/" class="admin-nav-link" target="_blank" rel="noopener noreferrer">View site ↗</a>
+        <button type="button" id="nav-settings-btn" class="admin-nav-link">Settings</button>
         <a href="/admin/logout" class="admin-nav-link">Sign out</a>
       </div>
     </div>
@@ -24,9 +25,76 @@
 
   <div class="admin-container">
 
+    <!-- ══ SETTINGS PANEL (hidden by default, toggled by nav button) ═══════════ -->
+    <div id="settings-panel" class="settings-panel" hidden>
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">Settings</h1>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">API Keys</div>
+        <p class="settings-section-desc">Keys are written directly to the server's <code>.env</code> file and never returned to this page. The form shows only whether a key is currently set.</p>
+
+        <div class="settings-key-list">
+
+          <div class="settings-key-row">
+            <div class="settings-key-info">
+              <div class="settings-key-name">Anthropic (Claude)</div>
+              <div class="settings-key-status">
+                <% if (apiKeyStatus.ANTHROPIC_API_KEY) { %>
+                  <span class="settings-badge settings-badge--set">Key set</span>
+                <% } else { %>
+                  <span class="settings-badge settings-badge--unset">Not set</span>
+                <% } %>
+              </div>
+            </div>
+            <form class="settings-key-form" data-key="ANTHROPIC_API_KEY">
+              <input
+                type="password"
+                class="settings-key-input"
+                placeholder="sk-ant-…"
+                autocomplete="new-password"
+                spellcheck="false"
+                aria-label="Anthropic API key">
+              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+            </form>
+            <div class="settings-key-feedback" aria-live="polite"></div>
+          </div>
+
+          <div class="settings-key-row">
+            <div class="settings-key-info">
+              <div class="settings-key-name">OpenAI <span class="settings-key-note">(coming soon)</span></div>
+              <div class="settings-key-status">
+                <% if (apiKeyStatus.OPENAI_API_KEY) { %>
+                  <span class="settings-badge settings-badge--set">Key set</span>
+                <% } else { %>
+                  <span class="settings-badge settings-badge--unset">Not set</span>
+                <% } %>
+              </div>
+            </div>
+            <form class="settings-key-form" data-key="OPENAI_API_KEY">
+              <input
+                type="password"
+                class="settings-key-input"
+                placeholder="sk-…"
+                autocomplete="new-password"
+                spellcheck="false"
+                aria-label="OpenAI API key"
+                disabled>
+              <button type="submit" class="btn btn-secondary btn-sm" disabled>Save</button>
+            </form>
+            <div class="settings-key-feedback" aria-live="polite"></div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /settings-panel -->
+
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
-      <button class="admin-tab is-active" role="tab" aria-selected="true"  aria-controls="tab-projects" data-tab="projects">Portfolio</button>
-      <button class="admin-tab"            role="tab" aria-selected="false" aria-controls="tab-activity" data-tab="activity">Activity</button>
+      <button class="admin-tab is-active" role="tab" aria-selected="true"  aria-controls="tab-projects"  data-tab="projects">Portfolio</button>
+      <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-activity"  data-tab="activity">Activity</button>
     </div>
 
     <!-- ══ PROJECTS TAB ══════════════════════════════════════════════ -->
@@ -37,16 +105,18 @@
         <div class="admin-page-header-actions">
           <button type="button" id="import-btn" class="btn btn-secondary">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M7 2v10M2 7h10"/>
+              <path d="M1 7h7M5 4l3 3-3 3"/>
+              <path d="M8 2h4v10H8"/>
             </svg>
-            Import project
+            Import Project
           </button>
-          <a href="/admin/projects/new" class="btn btn-primary">
+          <a href="/admin/projects/new" class="btn btn-secondary">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M7 2v10M2 7h10"/>
             </svg>
-            New project
+            Create Project
           </a>
+          <a href="/admin/studio" class="btn btn-primary">✦ Generate Project</a>
         </div>
       </div>
       <div id="import-status" style="font-size:13px; margin-bottom:12px;"></div>
@@ -89,7 +159,7 @@
 
           <div>
             <div class="project-list-title"><%= project.title %></div>
-            <div class="project-list-slug">/projects/<%= project.slug %></div>
+            <div class="project-list-slug">/projects/<%= project.slug %><% if (project.draft_data) { %><span class="draft-badge">Draft</span><% } %></div>
           </div>
 
           <div class="project-list-actions">
@@ -103,7 +173,7 @@
             >Preview ↗</a>
 
             <a
-              href="/admin/projects/<%= project.slug %>/edit"
+              href="/admin/projects/<%= project.slug %>/studio"
               class="btn btn-secondary btn-sm"
               aria-label="Edit <%= project.title %>"
             >Edit</a>

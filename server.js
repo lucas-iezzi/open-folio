@@ -73,6 +73,9 @@ db.exec(`
   if (!cols.includes('visible')) {
     db.exec(`ALTER TABLE projects ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`);
   }
+  if (!cols.includes('draft_data')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN draft_data TEXT`);
+  }
 }
 {
   const vcols = db.pragma('table_info(visits)').map(c => c.name);
@@ -92,6 +95,7 @@ function rowToProject(row) {
     order:        row.sort_order,
     visible:      row.visible !== 0,
     sections:     JSON.parse(row.sections || '[]'),
+    draft_data:   row.draft_data || null,
   };
 }
 
@@ -207,8 +211,8 @@ const _selectSorted = db.prepare('SELECT * FROM projects ORDER BY sort_order ASC
 const _selectPublic = db.prepare('SELECT * FROM projects WHERE visible = 1 ORDER BY sort_order ASC');
 const _deleteAll    = db.prepare('DELETE FROM projects');
 const _upsert       = db.prepare(`
-  INSERT INTO projects (slug, title, subtitle, pageTitle, thumbnail, thumbnailAlt, sort_order, visible, sections)
-  VALUES (@slug, @title, @subtitle, @pageTitle, @thumbnail, @thumbnailAlt, @sort_order, @visible, @sections)
+  INSERT INTO projects (slug, title, subtitle, pageTitle, thumbnail, thumbnailAlt, sort_order, visible, sections, draft_data)
+  VALUES (@slug, @title, @subtitle, @pageTitle, @thumbnail, @thumbnailAlt, @sort_order, @visible, @sections, @draft_data)
   ON CONFLICT(slug) DO UPDATE SET
     title        = excluded.title,
     subtitle     = excluded.subtitle,
@@ -217,7 +221,8 @@ const _upsert       = db.prepare(`
     thumbnailAlt = excluded.thumbnailAlt,
     sort_order   = excluded.sort_order,
     visible      = excluded.visible,
-    sections     = excluded.sections
+    sections     = excluded.sections,
+    draft_data   = excluded.draft_data
 `);
 
 function loadProjects() {
@@ -238,6 +243,7 @@ function saveProjects(projects) {
         sort_order:   p.order        ?? 0,
         visible:      p.visible === false ? 0 : 1,
         sections:     JSON.stringify(p.sections || []),
+        draft_data:   typeof p.draft_data === 'string' ? p.draft_data : null,
       });
     }
   })(projects);
@@ -257,6 +263,8 @@ const _insertVisit = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
+// TODO: consider deduplicating visits so a single visitor navigating across
+// multiple pages in a session only counts as one visit, not one per page.
 function recordVisit(req, type = 'page') {
   try {
     const ip   = req.headers['cf-connecting-ip'] || req.ip || req.socket?.remoteAddress || '';
@@ -326,8 +334,9 @@ function safeImageDir(slug) {
 }
 
 // ── File upload ───────────────────────────────────────────────────────────────
-const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
+const ALLOWED_MIME     = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const MAX_FILE_BYTES   = 20 * 1024 * 1024; // 20 MB
+const STUDIO_TEMP_BASE = path.join(__dirname, 'public', 'images', 'studio-temp');
 
 const storage = multer.diskStorage({
   destination(req, file, cb) {
@@ -354,6 +363,176 @@ const upload = multer({
   },
 });
 
+// Studio upload — images land in studio-temp/<tempId>/; max 3.5MB per image
+const studioStorage = multer.diskStorage({
+  destination(req, file, cb) {
+    const tempId = req.session.studio?.tempId;
+    if (!tempId || !/^[a-f0-9-]{36}$/.test(tempId)) return cb(new Error('No studio session'));
+    const dir = path.join(STUDIO_TEMP_BASE, tempId);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename(req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '');
+    cb(null, `${crypto.randomUUID()}${ext}`);
+  },
+});
+const STUDIO_IMAGE_MIMES = new Set(['image/jpeg','image/png','image/gif','image/webp']);
+const STUDIO_TEXT_MIMES  = new Set(['text/plain','text/markdown','text/x-markdown','text/csv','application/json']);
+
+const studioUpload = multer({
+  storage: studioStorage,
+  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  fileFilter(req, file, cb) {
+    if (STUDIO_IMAGE_MIMES.has(file.mimetype) || STUDIO_TEXT_MIMES.has(file.mimetype) || file.mimetype.startsWith('text/')) {
+      return cb(null, true);
+    }
+    cb(Object.assign(new Error('Unsupported file type. Upload images or text files (.txt, .md, .csv, .json).'), { status: 415 }));
+  },
+});
+
+// ── LLM helpers ───────────────────────────────────────────────────────────────
+const PROJECT_SCHEMA = `{
+  "slug": "kebab-case-url-slug (2-5 words)",
+  "title": "Short card label for the homepage grid (2-5 words)",
+  "pageTitle": "Full H1 heading on the project page",
+  "subtitle": "One compelling sentence below the title",
+  "thumbnail": "exact filename of the best hero image (e.g. photo.jpg), or empty string",
+  "thumbnailAlt": "descriptive alt text for the thumbnail",
+  "sections": [
+    {
+      "heading": "Section heading",
+      "body": "Section body text. Use \\n for paragraph breaks.",
+      "images": [{ "src": "exact filename", "alt": "descriptive alt text" }]
+    }
+  ]
+}`;
+
+const STUDIO_SYSTEM_PROMPT = `You are an AI assistant helping create portfolio project pages for Lucas Iezzi, a product designer and engineer.
+
+Given a project description and uploaded files, generate a structured project page.
+
+Return ONLY valid JSON — no markdown fences, no explanation. The response must be directly parseable by JSON.parse().
+
+Return this exact shape:
+{
+  "project": ${PROJECT_SCHEMA},
+  "summary": "1-2 sentence overview of what you created: how many sections, what they cover, which images you placed where."
+}
+
+Rules:
+- Return ONLY the JSON — nothing else
+- image src values: use ONLY the exact filename (e.g. "abc123.jpg") — never a full path
+- Only reference filenames explicitly listed in the prompt
+- Organise into 3-6 sections with a clear narrative arc (Overview → Process → Results)
+- Write in a professional, engaging portfolio voice
+- Keep the project concise: each section body should be a single short paragraph (2-4 sentences). Focus on what was done and why it matters — not granular technical details or step-by-step breakdowns
+- thumbnail: most visually striking image, ideally a hero shot; empty string if none
+- Do not invent technical details not present in the description`;
+
+const STUDIO_REFINE_PROMPT = `You are an AI assistant helping refine a portfolio project page for Lucas Iezzi.
+
+You are in an ongoing conversation. The user will send feedback, questions, or requests about the current project page.
+
+Decide whether the feedback requires regenerating the page JSON, or whether you can respond conversationally.
+
+Return ONLY valid JSON — no markdown fences, no explanation.
+
+If you can respond without changing the page (questions, clarifications, general feedback):
+{"message": "Your conversational response.", "regenerate": false}
+
+If the feedback requires changes to the page content, structure, text, or image placement:
+{"message": "Brief natural-language summary of what you changed.", "regenerate": true, "project": ${PROJECT_SCHEMA}}
+
+When regenerating:
+- image src values: use ONLY the exact filename — never a full path
+- Only reference filenames that were provided in the original prompt
+- Preserve all sections not mentioned in the feedback
+- Follow the same schema rules as the initial generation
+- Keep all section bodies concise: one short paragraph (2-4 sentences) per section — focus on what was done and why it matters, not granular technical details
+
+Decide to regenerate when the user: asks to change text, move/add/remove sections or images, update title/subtitle/slug, or makes any structural request.
+Decide NOT to regenerate when the user: asks a question about the current page, gives general positive feedback, or says something unrelated to page changes.`;
+
+async function callLLM({ provider, model, messages, systemPrompt = STUDIO_SYSTEM_PROMPT }) {
+  if (provider === 'anthropic') {
+    const Anthropic = require('@anthropic-ai/sdk');
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set in .env');
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages,
+    });
+    return response.content[0].text;
+  }
+  if (provider === 'openai') {
+    throw new Error('OpenAI support is not yet implemented. Add your key and the openai package to enable it.');
+  }
+  throw new Error(`Unknown provider: "${provider}"`);
+}
+
+function extractJSON(text) {
+  try { return JSON.parse(text); } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('LLM did not return valid JSON. Try again or rephrase your description.');
+  }
+}
+
+// Build the first user message for the LLM — images as base64, text files as content blocks.
+// Images are resized to ≤1568px before encoding (Anthropic's recommended max; saves tokens).
+async function buildFirstMessage(description, uploadedFiles, tempId, tags = {}) {
+  const sharp   = require('sharp');
+  const content = [];
+
+  const images    = uploadedFiles.filter(f => STUDIO_IMAGE_MIMES.has(f.mimeType) || f.fileType === 'image');
+  const textFiles = uploadedFiles.filter(f => !STUDIO_IMAGE_MIMES.has(f.mimeType) && f.fileType !== 'image');
+
+  if (images.length > 0) {
+    content.push({
+      type: 'text',
+      text: `Here are ${images.length} image(s) for this project. Each is labelled with its filename — use the exact filename in your JSON output:`,
+    });
+    for (const f of images) {
+      const filePath = f.permanentPath || path.join(STUDIO_TEMP_BASE, tempId, f.filename);
+      if (!fs.existsSync(filePath)) continue;
+      // Resize to max 1568px on the long edge, convert to JPEG for consistent encoding
+      const resized = await sharp(filePath)
+        .resize(1568, 1568, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      const data  = resized.toString('base64');
+      const label = tags[f.filename] ? `${f.filename} — ${tags[f.filename]}` : f.filename;
+      content.push({ type: 'text', text: `Image: ${label}` });
+      content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } });
+    }
+  }
+
+  for (const f of textFiles) {
+    const filePath = path.join(STUDIO_TEMP_BASE, tempId, f.filename);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const text  = fs.readFileSync(filePath, 'utf8');
+      const label = tags[f.filename]
+        ? `${f.originalName} (${tags[f.filename]})`
+        : f.originalName;
+      content.push({
+        type: 'text',
+        text: `--- Context file: ${label} ---\n${text.slice(0, 50000)}\n---`,
+      });
+    } catch { /* skip unreadable */ }
+  }
+
+  content.push({
+    type: 'text',
+    text: `Project description:\n${description}\n\nGenerate the project page JSON now.`,
+  });
+
+  return { role: 'user', content };
+}
+
 // ── robots.txt ────────────────────────────────────────────────────────────────
 app.get('/robots.txt', (req, res) => {
   res.type('text/plain').send('User-agent: *\nDisallow: /admin/\nDisallow: /admin\n');
@@ -363,6 +542,7 @@ app.get('/robots.txt', (req, res) => {
 // PUBLIC ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// TODO: add an About page (GET /about) with its own view and nav link.
 app.get('/', (req, res) => {
   recordVisit(req, 'page');
   res.render('index', { projects: publicProjects() });
@@ -479,13 +659,56 @@ app.post('/admin/projects/import', requireAuth, requireCsrf, (req, res) => {
   res.json({ ok: true, created, updated });
 });
 
+// ── Settings helpers ──────────────────────────────────────────────────────────
+const EDITABLE_KEYS = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']);
+
+function updateEnvFile(key, value) {
+  const envPath = path.join(__dirname, '.env');
+  let content = '';
+  try { content = fs.readFileSync(envPath, 'utf8'); } catch { /* file missing */ }
+  const regex = new RegExp(`^${key}=.*$`, 'm');
+  if (regex.test(content)) {
+    content = content.replace(regex, `${key}=${value}`);
+  } else {
+    content = content.replace(/\n*$/, '') + `\n${key}=${value}\n`;
+  }
+  fs.writeFileSync(envPath, content, 'utf8');
+  process.env[key] = value;
+}
+
+function apiKeyStatus() {
+  return {
+    ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY:    !!process.env.OPENAI_API_KEY,
+  };
+}
+
 app.get('/admin/dashboard', requireAuth, (req, res) => {
   res.render('admin/index', {
-    projects: sortedProjects(),
-    activity: getActivityStats(),
-    csrfToken: getCsrfToken(req),
-    flash: req.query.msg || null,
+    projects:     sortedProjects(),
+    activity:     getActivityStats(),
+    csrfToken:    getCsrfToken(req),
+    flash:        req.query.msg || null,
+    apiKeyStatus: apiKeyStatus(),
   });
+});
+
+// POST /admin/settings/api-key — write a key to .env and hot-reload process.env
+app.post('/admin/settings/api-key', requireAuth, requireCsrf, (req, res) => {
+  const { key, value } = req.body;
+  if (!EDITABLE_KEYS.has(key)) {
+    return res.status(400).json({ error: 'Unknown key.' });
+  }
+  if (typeof value !== 'string' || value.trim().length < 8) {
+    return res.status(400).json({ error: 'Key value is too short.' });
+  }
+  try {
+    updateEnvFile(key, value.trim());
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[settings/api-key]', err.message);
+    res.status(500).json({ error: 'Could not save key.' });
+  }
 });
 
 // ── New project form ──────────────────────────────────────────────────────────
@@ -541,6 +764,98 @@ app.get('/admin/projects/:slug/edit', requireAuth, (req, res) => {
     csrfToken: getCsrfToken(req),
     error: null,
   });
+});
+
+// ── Studio edit mode ──────────────────────────────────────────────────────────
+app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
+  const slug = sanitizeSlug(req.params.slug);
+  const project = loadProjects().find(p => p.slug === slug);
+  if (!project) return res.status(404).render('404');
+
+  let editProject = project;
+  let hasDraft = false;
+  if (project.draft_data) {
+    try { editProject = { ...project, ...JSON.parse(project.draft_data) }; hasDraft = true; } catch {}
+  }
+
+  req.session.studio = {
+    tempId:         crypto.randomUUID(),
+    editSlug:       slug,
+    uploadedFiles:  [],
+    description:    '',
+    history:        [],
+    chatHistory:    [],
+    currentProject: editProject,
+  };
+
+  const safeJson = JSON.stringify(editProject)
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+
+  res.render('admin/studio', {
+    csrfToken:          getCsrfToken(req),
+    tempId:             req.session.studio.tempId,
+    mode:               'edit',
+    editSlug:           slug,
+    hasDraft,
+    initialProjectJson: safeJson,
+  });
+});
+
+app.post('/admin/projects/:slug/save-draft-edits', requireAuth, requireCsrf, (req, res) => {
+  const slug = sanitizeSlug(req.params.slug);
+  if (!db.prepare('SELECT slug FROM projects WHERE slug = ?').get(slug)) {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+  const studio = req.session.studio;
+  if (!studio?.currentProject) return res.status(400).json({ error: 'No project in session.' });
+
+  const proj = studio.currentProject;
+  const draftData = JSON.stringify({
+    title:        (proj.title        || '').slice(0, 200),
+    subtitle:     (proj.subtitle     || '').slice(0, 300),
+    pageTitle:    (proj.pageTitle    || '').slice(0, 200),
+    thumbnail:    proj.thumbnail     || '',
+    thumbnailAlt: (proj.thumbnailAlt || '').slice(0, 200),
+    sections:     sanitizeSections(proj.sections),
+  });
+  db.prepare('UPDATE projects SET draft_data = ? WHERE slug = ?').run(draftData, slug);
+  res.json({ ok: true });
+});
+
+app.post('/admin/projects/:slug/publish-edits', requireAuth, requireCsrf, (req, res) => {
+  const slug = sanitizeSlug(req.params.slug);
+  const projects = loadProjects();
+  const idx = projects.findIndex(p => p.slug === slug);
+  if (idx === -1) return res.status(404).json({ error: 'Not found.' });
+
+  const studio = req.session.studio;
+  if (!studio?.currentProject) return res.status(400).json({ error: 'No project in session.' });
+
+  const proj = studio.currentProject;
+  projects[idx] = {
+    ...projects[idx],
+    title:        (proj.title        || '').slice(0, 200),
+    subtitle:     (proj.subtitle     || '').slice(0, 300),
+    pageTitle:    (proj.pageTitle    || '').slice(0, 200),
+    thumbnail:    validateImagePath(proj.thumbnail) || projects[idx].thumbnail,
+    thumbnailAlt: (proj.thumbnailAlt || '').slice(0, 200),
+    sections:     sanitizeSections(proj.sections),
+    draft_data:   null,
+  };
+  saveProjects(projects);
+  db.prepare('UPDATE projects SET draft_data = NULL WHERE slug = ?').run(slug);
+  delete req.session.studio;
+  res.json({ ok: true });
+});
+
+app.post('/admin/projects/:slug/discard-draft', requireAuth, requireCsrf, (req, res) => {
+  const slug = sanitizeSlug(req.params.slug);
+  if (!db.prepare('SELECT slug FROM projects WHERE slug = ?').get(slug)) {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+  db.prepare('UPDATE projects SET draft_data = NULL WHERE slug = ?').run(slug);
+  delete req.session.studio;
+  res.json({ ok: true });
 });
 
 // ── Update project ────────────────────────────────────────────────────────────
@@ -702,6 +1017,449 @@ app.get('/admin/geo', requireAuth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// AI STUDIO  (session auth, CSRF on mutating routes)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: resolve and validate a path within studio-temp/<tempId>
+function safeStudioPath(tempId, filename) {
+  if (!tempId || !/^[a-f0-9-]{36}$/.test(tempId)) throw new Error('Invalid tempId');
+  const base = path.join(STUDIO_TEMP_BASE, tempId);
+  const full = path.resolve(base, filename);
+  if (!full.startsWith(base + path.sep)) throw new Error('Path traversal');
+  return full;
+}
+
+// Clean up a studio temp folder
+function discardStudioTemp(tempId) {
+  if (!tempId || !/^[a-f0-9-]{36}$/.test(tempId)) return;
+  const dir = path.join(STUDIO_TEMP_BASE, tempId);
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+// Remap image srcs from temp paths to permanent paths in a project object
+function remapImagePaths(project, fromTempId, toSlug) {
+  const remap = src => {
+    const file = path.basename(src);
+    return `/images/projects/${toSlug}/${file}`;
+  };
+
+  if (project.thumbnail) project.thumbnail = remap(project.thumbnail);
+  project.sections = (project.sections || []).map(s => ({
+    ...s,
+    images: (s.images || []).map(img => ({ ...img, src: img.src ? remap(img.src) : '' })),
+  }));
+  return project;
+}
+
+// GET /admin/studio
+app.get('/admin/studio', requireAuth, (req, res) => {
+  // Keep existing session if one is active — only create fresh if there isn't one
+  if (!req.session.studio?.tempId) {
+    req.session.studio = {
+      tempId:        crypto.randomUUID(),
+      uploadedFiles: [],
+      description:   '',
+      history:       [],
+      chatHistory:   [],
+      currentProject: null,
+    };
+  }
+  res.render('admin/studio', {
+    csrfToken: getCsrfToken(req),
+    tempId:    req.session.studio.tempId,
+  });
+});
+
+// POST /admin/studio/restore — re-attach a previous temp folder after server restart
+app.post('/admin/studio/restore', requireAuth, requireCsrf, (req, res) => {
+  const { tempId, uploadedFiles = [], description = '' } = req.body;
+  if (!tempId || !/^[a-f0-9-]{36}$/.test(tempId)) {
+    return res.status(400).json({ error: 'Invalid session.' });
+  }
+  const dir = path.join(STUDIO_TEMP_BASE, tempId);
+  if (!fs.existsSync(dir)) {
+    return res.status(404).json({ error: 'expired' });
+  }
+  // Discard the newly-created empty session folder, then restore the old one
+  if (req.session.studio?.tempId && req.session.studio.tempId !== tempId) {
+    discardStudioTemp(req.session.studio.tempId);
+  }
+  // Validate each file still exists on disk
+  const validFiles = (Array.isArray(uploadedFiles) ? uploadedFiles : [])
+    .filter(f => {
+      if (!f?.filename || typeof f.filename !== 'string') return false;
+      if (!/^[a-f0-9-]{36}\.[a-z0-9]+$/i.test(f.filename)) return false;
+      return fs.existsSync(path.join(dir, f.filename));
+    })
+    .slice(0, 50);
+
+  req.session.studio = {
+    tempId,
+    uploadedFiles: validFiles,
+    description:   typeof description === 'string' ? description.slice(0, 50000) : '',
+    history:       [],
+    currentProject: null,
+  };
+  res.json({ ok: true, uploadedFiles: validFiles });
+});
+
+// POST /admin/studio/upload — add one file (image or text) to the temp workspace
+app.post('/admin/studio/upload', requireAuth, (req, res) => {
+  if (!req.session.studio?.tempId) {
+    return res.status(400).json({ error: 'No studio session. Reload the page.' });
+  }
+  studioUpload.single('image')(req, res, (err) => {
+    if (err) {
+      const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400);
+      return res.status(status).json({ error: err.message });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No file received.' });
+
+    const isImage = STUDIO_IMAGE_MIMES.has(req.file.mimetype);
+    const entry = {
+      filename:     req.file.filename,
+      mimeType:     req.file.mimetype,
+      originalName: req.file.originalname,
+      fileType:     isImage ? 'image' : 'text',
+    };
+    req.session.studio.uploadedFiles.push(entry);
+    res.json({
+      ok: true,
+      file: {
+        filename:     entry.filename,
+        originalName: entry.originalName,
+        fileType:     entry.fileType,
+        previewSrc:   isImage
+          ? `/images/studio-temp/${req.session.studio.tempId}/${entry.filename}`
+          : null,
+      },
+    });
+  });
+});
+
+// POST /admin/studio/delete-upload — remove one image from the temp workspace
+app.post('/admin/studio/delete-upload', requireAuth, requireCsrf, (req, res) => {
+  const { filename } = req.body;
+  const studio = req.session.studio;
+  if (!studio || typeof filename !== 'string') return res.status(400).json({ error: 'Bad request.' });
+
+  const idx = studio.uploadedFiles.findIndex(f => f.filename === filename);
+  if (idx === -1) return res.status(404).json({ error: 'File not found.' });
+
+  try {
+    const filePath = safeStudioPath(studio.tempId, filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch { /* ignore */ }
+
+  studio.uploadedFiles.splice(idx, 1);
+  res.json({ ok: true });
+});
+
+// POST /admin/studio/update-tag — update a file's label and add it to LLM context
+app.post('/admin/studio/update-tag', requireAuth, requireCsrf, (req, res) => {
+  const studio = req.session.studio;
+  if (!studio) return res.status(400).json({ error: 'No studio session.' });
+
+  const { filename, tag } = req.body;
+  if (typeof filename !== 'string' || typeof tag !== 'string') {
+    return res.status(400).json({ error: 'Bad request.' });
+  }
+
+  const file = (studio.uploadedFiles || []).find(f => f.filename === filename);
+  if (!file) return res.status(404).json({ error: 'File not found.' });
+
+  file.tag = tag.slice(0, 80);
+
+  // Append to LLM history so the label appears in future chat context
+  if (studio.history?.length > 0 && tag.trim()) {
+    studio.history.push({
+      role: 'user',
+      content: `I've labeled the file "${file.originalName || filename}" as "${tag.trim()}".`,
+    });
+    studio.history.push({
+      role: 'assistant',
+      content: JSON.stringify({
+        message: `Noted — I've labeled "${file.originalName || filename}" as "${tag.trim()}". I'll keep this in mind for any future layout changes.`,
+        regenerate: false,
+      }),
+    });
+  }
+
+  res.json({ ok: true });
+});
+
+// POST /admin/studio/generate — first LLM call; builds context with images
+app.post('/admin/studio/generate', requireAuth, requireCsrf, async (req, res) => {
+  const studio = req.session.studio;
+  if (!studio) return res.status(400).json({ error: 'No studio session. Reload the page.' });
+
+  const { description, provider = 'anthropic', model = 'claude-sonnet-4-6', tags = {} } = req.body;
+  if (!description || description.trim().length < 10) {
+    return res.status(400).json({ error: 'Please add a project description (at least 10 characters).' });
+  }
+
+  try {
+    const firstMsg = await buildFirstMessage(description.trim(), studio.uploadedFiles, studio.tempId, tags);
+    const rawText  = await callLLM({ provider, model, messages: [firstMsg] });
+    const parsed   = extractJSON(rawText);
+
+    // Support both {project, summary} (new) and legacy bare-project format
+    let projectData, summary;
+    if (parsed.project && typeof parsed.project === 'object') {
+      projectData = parsed.project;
+      summary     = parsed.summary || 'Project page generated.';
+    } else {
+      projectData = parsed;
+      summary     = 'Project page generated.';
+    }
+
+    // Prepend temp paths to image srcs returned by LLM
+    const tempId = studio.tempId;
+    if (projectData.thumbnail) {
+      projectData.thumbnail = `/images/studio-temp/${tempId}/${projectData.thumbnail}`;
+    }
+    projectData.sections = (projectData.sections || []).map(s => ({
+      ...s,
+      id: crypto.randomUUID(),
+      images: (s.images || []).map(img => ({
+        ...img,
+        src: img.src ? `/images/studio-temp/${tempId}/${img.src}` : '',
+      })),
+    }));
+
+    // Save state
+    studio.description   = description.trim();
+    studio.history       = [{ role: 'assistant', content: rawText }];
+    studio.chatHistory   = [
+      { role: 'user',      text: description.trim() },
+      { role: 'assistant', text: summary },
+    ];
+    studio.currentProject = projectData;
+
+    res.json({ ok: true, project: projectData, summary });
+  } catch (err) {
+    console.error('[studio/generate]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /admin/studio/refine — chat-mode: LLM decides whether to respond or regenerate
+app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
+  const studio = req.session.studio;
+  if (!studio?.currentProject) return res.status(400).json({ error: 'Generate a project first.' });
+
+  const { feedback, provider = 'anthropic', model = 'claude-sonnet-4-6', tags = {}, editorImages, currentProject, hadManualEdits } = req.body;
+  if (!feedback || feedback.trim().length < 3) {
+    return res.status(400).json({ error: 'Please enter a message.' });
+  }
+
+  if (currentProject && typeof currentProject === 'object' && Array.isArray(currentProject.sections)) {
+    studio.currentProject = currentProject;
+  }
+
+  try {
+    const editorFiles = Array.isArray(editorImages)
+      ? editorImages.filter(f => f.filename && f.permanentPath).map(f => ({
+          ...f,
+          permanentPath: path.join(__dirname, 'public', f.permanentPath.replace(/^\//, '')),
+          fileType: 'image',
+          mimeType: 'image/jpeg',
+        }))
+      : [];
+    const effectiveFiles = [...studio.uploadedFiles, ...editorFiles];
+
+    // Reconstruct full message chain: first message has images + description, then conversation history
+    const firstMsg = await buildFirstMessage(studio.description, effectiveFiles, studio.tempId, tags);
+    const messages = [firstMsg];
+
+    for (const h of studio.history) {
+      messages.push({ role: h.role, content: h.content });
+    }
+    if (hadManualEdits && studio.currentProject) {
+      messages.push({ role: 'user', content: 'I made some manual edits. Here is the current project state: ' + JSON.stringify(studio.currentProject) });
+      messages.push({ role: 'assistant', content: 'Understood, I can see the current project state.' });
+    }
+    messages.push({ role: 'user', content: feedback.trim() });
+
+    const rawText = await callLLM({ provider, model, messages, systemPrompt: STUDIO_REFINE_PROMPT });
+    const parsed  = extractJSON(rawText);
+
+    const { message = '', regenerate = false, project: projectData } = parsed;
+
+    studio.history.push({ role: 'user',      content: feedback.trim() });
+    studio.history.push({ role: 'assistant', content: rawText });
+    studio.chatHistory = studio.chatHistory || [];
+    studio.chatHistory.push({ role: 'user',      text: feedback.trim() });
+    studio.chatHistory.push({ role: 'assistant', text: message });
+
+    if (regenerate && projectData && typeof projectData === 'object') {
+      const tempId = studio.tempId;
+      if (projectData.thumbnail) {
+        projectData.thumbnail = `/images/studio-temp/${tempId}/${projectData.thumbnail}`;
+      }
+      projectData.sections = (projectData.sections || []).map(s => ({
+        ...s,
+        id: s.id || crypto.randomUUID(),
+        images: (s.images || []).map(img => ({
+          ...img,
+          src: img.src ? `/images/studio-temp/${tempId}/${img.src}` : '',
+        })),
+      }));
+      studio.currentProject = projectData;
+      return res.json({ ok: true, message, regenerate: true, project: projectData });
+    }
+
+    res.json({ ok: true, message, regenerate: false });
+  } catch (err) {
+    console.error('[studio/refine]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /admin/studio/preview — render project.ejs with current project, return HTML string
+app.post('/admin/studio/preview', requireAuth, (req, res) => {
+  const project = req.session.studio?.currentProject;
+  if (!project) return res.status(404).json({ error: 'No project to preview.' });
+
+  // Render without running through validateImagePath (temp paths wouldn't pass)
+  req.app.render('project', { project }, (err, html) => {
+    if (err) {
+      console.error('[studio/preview]', err);
+      return res.status(500).json({ error: 'Could not render preview.' });
+    }
+    // Inject base tag so relative URLs resolve correctly inside srcdoc iframe
+    const origin   = `${req.protocol}://${req.get('host')}`;
+    const withBase = html.replace('<head>', `<head><base href="${origin}">`);
+    res.json({ html: withBase });
+  });
+});
+
+// POST /admin/studio/publish — save to DB, move images to permanent location
+app.post('/admin/studio/publish', requireAuth, requireCsrf, (req, res) => {
+  const studio = req.session.studio;
+  if (!studio?.currentProject) return res.status(400).json({ error: 'Nothing to publish.' });
+
+  const rawSlug = (req.body.slug || studio.currentProject.slug || '').trim();
+  const slug    = sanitizeSlug(rawSlug);
+  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
+
+  const projects = loadProjects();
+  if (projects.find(p => p.slug === slug)) {
+    return res.status(409).json({ error: `A project with slug "${slug}" already exists.` });
+  }
+
+  // Move images from temp to permanent location
+  const destDir = path.join(IMAGES_BASE, slug);
+  try { fs.mkdirSync(destDir, { recursive: true }); } catch { /* exists */ }
+
+  let project = JSON.parse(JSON.stringify(studio.currentProject)); // deep copy
+
+  const moveImage = (src) => {
+    if (!src || !src.includes('studio-temp')) return src;
+    const filename = path.basename(src);
+    const srcPath  = path.join(STUDIO_TEMP_BASE, studio.tempId, filename);
+    const dstPath  = path.join(destDir, filename);
+    try {
+      if (fs.existsSync(srcPath)) fs.renameSync(srcPath, dstPath);
+    } catch { /* file may already be moved */ }
+    return `/images/projects/${slug}/${filename}`;
+  };
+
+  if (project.thumbnail) project.thumbnail = moveImage(project.thumbnail);
+  project.sections = (project.sections || []).map(s => ({
+    ...s,
+    images: (s.images || []).map(img => ({ ...img, src: moveImage(img.src) })),
+  }));
+
+  // Sanitize and save
+  const reqTitle  = (req.body.title || '').trim();
+  const maxOrder  = projects.reduce((m, p) => Math.max(m, p.order ?? 0), -1);
+  const newProject = {
+    slug,
+    title:        (reqTitle || project.title || '').slice(0, 200),
+    subtitle:     (project.subtitle     || '').slice(0, 300),
+    pageTitle:    (project.pageTitle    || '').slice(0, 200),
+    thumbnail:    validateImagePath(project.thumbnail),
+    thumbnailAlt: (project.thumbnailAlt || '').slice(0, 200),
+    order:        maxOrder + 1,
+    visible:      true,
+    sections:     sanitizeSections(project.sections),
+  };
+
+  projects.push(newProject);
+  saveProjects(projects);
+
+  // Clean up temp folder
+  discardStudioTemp(studio.tempId);
+  delete req.session.studio;
+
+  res.json({ ok: true, slug });
+});
+
+// POST /admin/studio/save-draft — same as publish but visible: false
+app.post('/admin/studio/save-draft', requireAuth, requireCsrf, (req, res) => {
+  const studio = req.session.studio;
+  if (!studio?.currentProject) return res.status(400).json({ error: 'Nothing to save.' });
+
+  const rawSlug = (req.body.slug || studio.currentProject.slug || '').trim();
+  const slug    = sanitizeSlug(rawSlug);
+  if (!slug) return res.status(400).json({ error: 'A valid slug is required.' });
+
+  const projects = loadProjects();
+  if (projects.find(p => p.slug === slug)) {
+    return res.status(409).json({ error: `A project with slug "${slug}" already exists.` });
+  }
+
+  const destDir = path.join(IMAGES_BASE, slug);
+  try { fs.mkdirSync(destDir, { recursive: true }); } catch { /* exists */ }
+
+  let project = JSON.parse(JSON.stringify(studio.currentProject));
+
+  const moveImage = (src) => {
+    if (!src || !src.includes('studio-temp')) return src;
+    const filename = path.basename(src);
+    const srcPath  = path.join(STUDIO_TEMP_BASE, studio.tempId, filename);
+    const dstPath  = path.join(destDir, filename);
+    try { if (fs.existsSync(srcPath)) fs.renameSync(srcPath, dstPath); } catch {}
+    return `/images/projects/${slug}/${filename}`;
+  };
+
+  if (project.thumbnail) project.thumbnail = moveImage(project.thumbnail);
+  project.sections = (project.sections || []).map(s => ({
+    ...s,
+    images: (s.images || []).map(img => ({ ...img, src: moveImage(img.src) })),
+  }));
+
+  const reqTitle = (req.body.title || '').trim();
+  const maxOrder = projects.reduce((m, p) => Math.max(m, p.order ?? 0), -1);
+  const draft = {
+    slug,
+    title:        (reqTitle || project.title || '').slice(0, 200),
+    subtitle:     (project.subtitle     || '').slice(0, 300),
+    pageTitle:    (project.pageTitle    || '').slice(0, 200),
+    thumbnail:    validateImagePath(project.thumbnail),
+    thumbnailAlt: (project.thumbnailAlt || '').slice(0, 200),
+    order:        maxOrder + 1,
+    visible:      false,
+    sections:     sanitizeSections(project.sections),
+  };
+
+  projects.push(draft);
+  saveProjects(projects);
+
+  discardStudioTemp(studio.tempId);
+  delete req.session.studio;
+  res.json({ ok: true, slug });
+});
+
+// POST /admin/studio/discard — clean up and go back to dashboard
+app.post('/admin/studio/discard', requireAuth, requireCsrf, (req, res) => {
+  discardStudioTemp(req.session.studio?.tempId);
+  delete req.session.studio;
+  res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REST API  (bearer-token auth — no session, no CSRF)
 // ═══════════════════════════════════════════════════════════════════════════════
 // Set API_KEY in .env to enable. Callers send:  Authorization: Bearer <key>
@@ -806,6 +1564,10 @@ function validateImagePath(p) {
   return '';
 }
 
+// TODO: add YouTube embed support to sections. Each section's media slot currently
+// only supports images. Plan: add an optional `videos` array (or a `youtubeId` field)
+// alongside `images` in the section schema. The admin UI would let you paste a YouTube
+// URL, extract the video ID, store it, and render an <iframe> embed in the project view.
 function sanitizeSections(sections) {
   if (!Array.isArray(sections)) return [];
   return sections.slice(0, 50).map((s) => ({

@@ -1,0 +1,93 @@
+/* Editing mode styles — injected into the preview iframe in edit mode */
+
+body[data-edit-mode] * { box-sizing: border-box; }
+
+[contenteditable] {
+  outline: none;
+  border-radius: 3px;
+  transition: background 0.15s ease;
+  cursor: text;
+}
+[contenteditable]:hover {
+  background: rgba(100, 130, 255, 0.06);
+}
+[contenteditable]:focus {
+  background: rgba(100, 130, 255, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(100, 130, 255, 0.3);
+}
+[contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: #aaa;
+  pointer-events: none;
+  font-style: italic;
+}
+
+.edit-section-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  margin-bottom: 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.edit-section-wrap:hover .edit-section-bar { opacity: 1; }
+.edit-section-drag { cursor: grab; color: #999; font-size: 16px; padding: 2px 4px; user-select: none; }
+.edit-section-drag:active { cursor: grabbing; }
+.edit-section-delete {
+  background: none; border: none; cursor: pointer; color: #999; font-size: 14px; padding: 2px 6px; border-radius: 3px; line-height: 1;
+}
+.edit-section-delete:hover { background: rgba(200,0,0,0.1); color: #cc2200; }
+
+.edit-img-wrap { position: relative; display: inline-block; cursor: grab; }
+.edit-img-wrap:active { cursor: grabbing; }
+.edit-img-wrap.drag-source { opacity: 0.4; }
+.edit-img-controls {
+  position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s;
+}
+.edit-img-wrap:hover .edit-img-controls { opacity: 1; }
+.edit-img-remove {
+  background: rgba(0,0,0,0.6); border: none; color: #fff; border-radius: 50%; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; line-height: 1;
+}
+.edit-img-remove:hover { background: #cc2200; }
+
+.edit-img-drop-indicator {
+  width: 3px; background: #6464ff; border-radius: 2px; align-self: stretch;
+  display: none; margin: 0 2px;
+}
+.edit-img-drop-indicator.is-active { display: block; }
+
+.edit-add-img {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border: 1.5px dashed #bbb; border-radius: 6px;
+  background: none; cursor: pointer; color: #888; font-size: 14px; font-family: inherit;
+  transition: border-color 0.15s, color 0.15s;
+  vertical-align: top; margin: 4px;
+  white-space: nowrap;
+}
+.edit-add-img:hover { border-color: #6464ff; color: #6464ff; }
+
+.edit-add-section {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 0; height: 32px; opacity: 0; transition: opacity 0.2s;
+  position: relative; margin: 0 7%;
+}
+.edit-add-section::before {
+  content: ''; flex: 1; height: 1px; background: #ddd;
+}
+.edit-add-section::after {
+  content: ''; flex: 1; height: 1px; background: #ddd;
+}
+.edit-add-section:hover { opacity: 1; }
+.edit-add-section-btn {
+  background: #fff; border: 1.5px solid #bbb; color: #888; font-size: 13px; font-family: inherit;
+  border-radius: 20px; padding: 3px 14px; cursor: pointer; white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.edit-add-section-btn:hover { border-color: #6464ff; color: #6464ff; }
+
+.edit-section-drop-above { box-shadow: inset 0 2px 0 #6464ff; }
+.edit-section-drop-below { box-shadow: inset 0 -2px 0 #6464ff; }
+
+.edit-section-wrap { position: relative; }

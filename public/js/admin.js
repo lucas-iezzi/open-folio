@@ -30,6 +30,7 @@
   // ── Init both contexts — each guards itself ───────────────────────
   initDashboard();
   initProjectForm();
+  initSettings();
 
   function countryFlag(code) {
     if (!code || code.length !== 2) return '';
@@ -611,5 +612,55 @@
       statusEl.style.color = type === 'error' ? 'var(--danger)' : type === 'ok' ? 'var(--success)' : 'var(--muted)';
     }
   }
+
+  // ── Settings panel toggle ──────────────────────────────────────────────────
+  function initSettings() {
+    const btn   = document.getElementById('nav-settings-btn');
+    const panel = document.getElementById('settings-panel');
+    if (!btn || !panel) return;
+    btn.addEventListener('click', () => {
+      if (panel.hasAttribute('hidden')) {
+        panel.removeAttribute('hidden');
+        panel.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        panel.setAttribute('hidden', '');
+      }
+    });
+  }
+
+  // ── Settings: API key forms ────────────────────────────────────────────────
+  document.querySelectorAll('.settings-key-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key      = form.dataset.key;
+      const input    = form.querySelector('input');
+      const feedback = form.nextElementSibling;
+      const btn      = form.querySelector('button[type="submit"]');
+      const value    = input.value.trim();
+
+      if (!value) return;
+
+      btn.disabled = true;
+      feedback.textContent = '';
+      feedback.className   = 'settings-key-feedback';
+
+      try {
+        await apiFetch('/admin/settings/api-key', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ key, value }),
+        });
+        input.value          = '';
+        input.placeholder    = '••• saved — reload to see status update •••';
+        feedback.textContent = 'Saved successfully.';
+        feedback.className   = 'settings-key-feedback is-success';
+      } catch (err) {
+        feedback.textContent = err.message;
+        feedback.className   = 'settings-key-feedback is-error';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
 
 })();
