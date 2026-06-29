@@ -258,7 +258,7 @@ const _insertVisit = db.prepare(`
 
 function recordVisit(req, type = 'page') {
   try {
-    const ip   = req.ip || req.socket?.remoteAddress || '';
+    const ip   = req.headers['cf-connecting-ip'] || req.ip || req.socket?.remoteAddress || '';
     const hash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
     const ref  = (req.headers['referer'] || req.headers['referrer'] || '').slice(0, 200);
     const ua   = (req.headers['user-agent'] || '').slice(0, 200);
