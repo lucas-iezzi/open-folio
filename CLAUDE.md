@@ -144,6 +144,27 @@ scp user@SERVER:~/portfolio/data/portfolio.db ./backup-$(date +%Y%m%d).db
 
 The admin panel's **Export JSON** button also gives a portable snapshot of all project text/metadata at any time.
 
+## Planned: AI Studio (not yet built)
+
+A new **AI Studio** tab in the admin panel for LLM-assisted project creation. Build and test locally first, tag a stable release before deploying.
+
+**Flow:** User dumps raw notes + uploads images/files → hits Generate → Claude reads everything and produces a structured project page draft → live preview renders using the real `project.ejs` template → user types feedback to refine live → hits Publish to save to DB and move images into place.
+
+**New routes to add:**
+- `GET /admin/studio` — studio page
+- `POST /admin/studio/upload` — stages images/files in `public/images/studio-temp/`
+- `POST /admin/studio/generate` — sends text + images (base64) to Claude, returns project JSON
+- `POST /admin/studio/refine` — takes feedback + existing JSON, returns updated JSON
+- `POST /admin/studio/publish` — saves project to DB, moves images to `public/images/projects/<slug>/`
+
+**LLM:** Claude API via `@anthropic-ai/sdk`. Add `ANTHROPIC_API_KEY` to `.env`. Send images as base64 so Claude can see them and decide placement. Keep conversation history in the session for iterative refinement. Model is configurable — sonnet for speed, opus for quality.
+
+**UI layout:** Split-pane. Left: brain dump textarea + image drop zone + file uploads + feedback input. Right: live preview using `project.ejs`. Bottom: Publish / Discard buttons.
+
+**File handling:** Temp uploads land in `public/images/studio-temp/`. On Publish, images move to the permanent project folder. On Discard, temp folder is deleted. PDFs: extract text server-side and send as context to Claude (not displayed on the page) — needs `pdf-parse` package.
+
+**Build order:** (1) env var + SDK install, (2) temp upload route, (3) generate route (text first, then vision), (4) studio UI input panel, (5) preview rendering, (6) refine/feedback loop, (7) publish + cleanup.
+
 ## Scripts
 
 - `setup.js` — interactive: generates `.env` with secrets. Run once on first install, or to reset the admin password.
