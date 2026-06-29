@@ -5,3 +5,4 @@ public/images/projects/
 *.log
 npm-debug.log*
 .DS_Store
+.claude/

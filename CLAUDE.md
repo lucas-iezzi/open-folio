@@ -146,14 +146,8 @@ The admin panel's **Export JSON** button also gives a portable snapshot of all p
 
 ## Scripts
 
-One-off utility scripts live in `scripts/`. They run against the local DB and are safe to re-run (idempotent where it matters):
-
-- `setup.js` — interactive: generates `.env` with secrets. Run once on first install.
-- `fix-images.js` — assigns correct images to each project section (used to fix Webflow import mismatches)
-- `fix-text.js` — syncs `subtitle` and `pageTitle` fields to match lucasiezzi.com exactly
-- `update-text.js` — updates section body text to match Webflow verbatim
-- `migrate-to-sqlite.js` — one-time migration from the old JSON flat-file store to SQLite
-- `import-webflow-content.js` — bulk import of Webflow CMS content (used during initial setup)
+- `setup.js` — interactive: generates `.env` with secrets. Run once on first install, or to reset the admin password.
+- `sync.sh` — run from your **local machine** to push/pull the database and images between local and the production server. Not intended to run on the server itself.
 
 ## Design System
 

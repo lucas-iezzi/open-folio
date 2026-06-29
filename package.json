@@ -7,8 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "setup": "node scripts/setup.js",
-    "migrate": "node scripts/migrate-to-sqlite.js"
+    "setup": "node scripts/setup.js"
   },
   "engines": {
     "node": ">=18.0.0"
