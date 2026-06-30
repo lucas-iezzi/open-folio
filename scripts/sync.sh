@@ -17,11 +17,14 @@ read -p "Enter 1 or 2: " choice
 
 if [ "$choice" = "1" ]; then
     echo ""
+    echo "Ensuring remote directories exist..."
+    ssh "$SERVER" 'mkdir -p ~/portfolio/data ~/portfolio/public/images/projects ~/portfolio/public/images/logos ~/portfolio/public/images/studio-temp'
+    echo ""
     echo "Pushing DB..."
     rsync -avz "$LOCAL_DB" "$REMOTE_DB"
     echo ""
     echo "Pushing images..."
-    rsync -avz "$LOCAL_IMAGES" "$REMOTE_IMAGES"
+    rsync -avz --mkpath "$LOCAL_IMAGES" "$REMOTE_IMAGES"
     echo ""
     echo "Done. You may want to restart the app on the server:"
     echo "  ssh $SERVER 'pm2 restart portfolio'"
