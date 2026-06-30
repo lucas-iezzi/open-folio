@@ -17,15 +17,18 @@ const state = {
   provider:         'anthropic',
   model:            'claude-sonnet-4-6',
   currentProject:   null,
-  sidebarCollapsed: false,
-  editModeActive:   false,
-  hasManualEdits:   false,
+  chatAttachments:  [],   // files staged for the next chat message only
+  pendingAiProject: null, // AI-suggested project awaiting accept/discard
+  preAiProject:     null, // snapshot of project before AI suggestion
 };
+
+// ── Image editing state ───────────────────────────────────────────────────────
+let _imgActiveWrap = null; // .img-section-wrap currently selected
+let _imgSelectedEl = null; // <img> currently selected within that wrap
 
 // ── Mode (edit vs generate) ───────────────────────────────────────────────────
 const studioMode = document.querySelector('meta[name="studio-mode"]')?.content || 'generate';
 const editSlug   = document.querySelector('meta[name="studio-edit-slug"]')?.content || '';
-const hasDraft   = document.querySelector('meta[name="studio-has-draft"]')?.content === '1';
 
 let initialProject = null;
 const initDataEl = document.getElementById('studio-initial-data');
@@ -103,8 +106,6 @@ function restoreUI(saved) {
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const studioWrap        = $('studio-wrap');
-// Sync collapse state immediately from DOM — edit mode pre-applies sidebar-collapsed server-side
-if (studioWrap?.classList.contains('sidebar-collapsed')) state.sidebarCollapsed = true;
 const dropZone          = $('studio-drop-zone');
 // Attach a throwaway file input off-screen for the duration of the pick,
 // then remove it — browsers require it to be in the DOM to allow .click(),
@@ -113,7 +114,9 @@ function pickFiles() {
   const inp = document.createElement('input');
   inp.type  = 'file';
   inp.multiple = true;
-  inp.accept   = 'image/jpeg,image/png,image/gif,image/webp,text/plain,text/markdown,text/csv,application/json,.txt,.md,.csv,.json';
+  inp.accept = studioMode === 'edit'
+    ? 'image/jpeg,image/png,image/gif,image/webp'
+    : 'image/jpeg,image/png,image/gif,image/webp,text/plain,text/markdown,text/csv,application/json,.txt,.md,.csv,.json';
   inp.style.cssText = 'position:fixed;top:-200vh;left:-200vw;width:0;height:0;opacity:0;overflow:hidden;pointer-events:none;';
   document.body.appendChild(inp);
 
@@ -132,33 +135,32 @@ function pickFiles() {
 
   inp.click();
 }
-const pregenFileList    = $('pregen-file-list');
-const fileGrid          = $('studio-image-grid');
-const uploadStatus      = $('studio-upload-status');
+const pregenFileList      = $('pregen-file-list');
+const fileGrid            = $('studio-image-grid');
+const uploadStatus        = $('studio-upload-status');
 const uploadStatusSidebar = $('studio-upload-status-sidebar');
-const tagSaveStatus     = $('studio-tag-save-status');
-const description       = $('studio-description');
-const provider          = $('studio-provider');
-const modelSel          = $('studio-model');
-const generateBtn       = $('studio-generate-btn');
-const generateStatus    = $('studio-generate-status');
-const fileCountNote     = $('studio-file-count-note');
-const chatHistory       = $('studio-chat-history');
-const chatInput         = $('studio-chat-input');
-const chatSend          = $('studio-chat-send');
-const chatStatus        = $('studio-chat-status');
-const titleInput        = $('studio-title');
-const slugInput         = $('studio-slug');
-const slugPreview       = $('studio-slug-preview');
-const publishBtn        = $('studio-publish-btn');
-const draftBtn          = $('studio-draft-btn');
-const discardBtn        = $('studio-discard-btn');
-const publishStatus     = $('studio-publish-status');
-const previewFrame      = $('studio-preview-frame');
-const loading           = $('studio-loading');
-const loadingText       = $('studio-loading-text');
-const sidebarUploadBtn  = $('sidebar-upload-btn');
-const sidebarToggleBtn  = $('studio-sidebar-toggle');
+const tagSaveStatus       = $('studio-tag-save-status');
+const description         = $('studio-description');
+const provider            = $('studio-provider');
+const modelSel            = $('studio-model');
+const generateBtn         = $('studio-generate-btn');
+const generateStatus      = $('studio-generate-status');
+const fileCountNote       = $('studio-file-count-note');
+const chatHistory         = $('studio-chat-history');
+const chatInput           = $('studio-chat-input');
+const chatSend            = $('studio-chat-send');
+const chatStatus          = $('studio-chat-status');
+const titleInput          = $('studio-title');
+const slugInput           = $('studio-slug');
+const slugPreview         = $('studio-slug-preview');
+const publishBtn          = $('studio-publish-btn');
+const draftBtn            = $('studio-draft-btn');
+const discardBtn          = $('studio-discard-btn');
+const publishStatus       = $('studio-publish-status');
+const previewFrame        = $('studio-preview-frame');
+const loading             = $('studio-loading');
+const loadingText         = $('studio-loading-text');
+const sidebarUploadBtn    = $('sidebar-upload-btn');
 
 const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -166,7 +168,6 @@ const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content ||
 function setStatus(el, msg, isError = false) {
   if (!el) return;
   el.textContent = msg;
-  // publishStatus is .studio-nav-status in edit mode, .studio-status in generate mode
   const base = el.classList.contains('studio-nav-status') ? 'studio-nav-status' : 'studio-status';
   el.className = base + (isError ? ' is-error' : '');
 }
@@ -176,9 +177,9 @@ function lockButtons(on) {
   if (generateBtn) generateBtn.disabled = on;
   chatSend.disabled     = on;
   chatInput.disabled    = on;
-  publishBtn.disabled   = on;
-  draftBtn.disabled     = on;
-  discardBtn.disabled   = on;
+  if (publishBtn) publishBtn.disabled   = on;
+  if (draftBtn)   draftBtn.disabled     = on;
+  if (discardBtn) discardBtn.disabled   = on;
 }
 
 function slugify(str) {
@@ -249,9 +250,7 @@ function updateFileCountNote() {
   const parts  = [];
   if (images) parts.push(`${images} image${images !== 1 ? 's' : ''}`);
   if (docs)   parts.push(`${docs} file${docs !== 1 ? 's' : ''}`);
-  fileCountNote.textContent = parts.length
-    ? parts.join(' · ')
-    : 'No files';
+  fileCountNote.textContent = parts.length ? parts.join(' · ') : 'No files';
 }
 
 // ── Layout transition ─────────────────────────────────────────────────────────
@@ -260,22 +259,19 @@ let _timerStart    = 0;
 
 function transitionToPostGen() {
   const sidebar = $('studio-sidebar');
-  sidebar.style.display = ''; // unhide; CSS grid takes over from here
+  sidebar.style.display = '';
   studioWrap.classList.add('is-generated');
   loading.classList.add('is-active');
   previewFrame.style.display = 'none';
   openSection('chat');
   updateFileCountNote();
-  renderAllFiles(); // re-render sidebar grid
+  renderAllFiles();
 }
 
 function startLoadingTimer() {
   _timerStart = Date.now();
   clearInterval(_timerInterval);
-  const tick = () => {
-    const s = Math.floor((Date.now() - _timerStart) / 1000);
-    loadingText.textContent = `Generating — ${s}s`;
-  };
+  const tick = () => { loadingText.textContent = `Generating — ${Math.floor((Date.now() - _timerStart) / 1000)}s`; };
   tick();
   _timerInterval = setInterval(tick, 1000);
 }
@@ -333,62 +329,41 @@ function fileExt(name) {
   return (name || '').split('.').pop().toUpperCase().slice(0, 4);
 }
 
-// File list shown in the pre-gen form card — includes label inputs
 function renderPregenFileList() {
   if (!pregenFileList) return;
   pregenFileList.innerHTML = '';
   for (const f of state.uploadedFiles) {
     const item = document.createElement('div');
     item.className = 'studio-pregen-file-item';
-
-    const tagVal         = (f.tag || '').replace(/"/g, '&quot;');
-    const tagPlaceholder = f.fileType === 'image' ? 'e.g. hero shot, before photo' : 'e.g. project notes, spec doc';
-
-    const thumb = f.fileType === 'image'
+    const tagVal = (f.tag || '').replace(/"/g, '&quot;');
+    const tagPh  = f.fileType === 'image' ? 'e.g. hero shot, before photo' : 'e.g. project notes, spec doc';
+    const thumb  = f.fileType === 'image'
       ? `<img class="studio-pregen-file-thumb" src="${f.previewSrc}" alt="${f.originalName}">`
       : `<div class="studio-pregen-file-icon">${fileExt(f.originalName)}</div>`;
-
     item.innerHTML = `
       ${thumb}
       <div class="studio-pregen-file-info">
         <span class="studio-pregen-file-name" title="${f.originalName}">${f.originalName}</span>
-        <input class="studio-pregen-tag-input" type="text" placeholder="${tagPlaceholder}" maxlength="80" value="${tagVal}" data-filename="${f.filename}" aria-label="Label for ${f.originalName}">
+        <input class="studio-pregen-tag-input" type="text" placeholder="${tagPh}" maxlength="80" value="${tagVal}" data-filename="${f.filename}" aria-label="Label for ${f.originalName}">
       </div>
       <button class="studio-pregen-file-remove" data-filename="${f.filename}" title="Remove">✕</button>`;
-
     pregenFileList.appendChild(item);
   }
 }
 
-// Full tag-editing grid shown in the sidebar
 function renderFileGrid() {
   fileGrid.innerHTML = '';
   for (const f of state.uploadedFiles) {
+    if (f.fileType !== 'image') continue; // edit mode shows images only
     const card = document.createElement('div');
     card.className = 'studio-file-card';
-
-    const tagVal         = (f.tag || '').replace(/"/g, '&quot;');
-    const tagPlaceholder = f.fileType === 'image' ? 'e.g. hero shot, before photo' : 'e.g. project notes, spec doc';
-
-    if (f.fileType === 'image') {
-      card.innerHTML = `
-        <div class="studio-file-thumb">
-          <img src="${f.previewSrc}" alt="${f.originalName}" title="${f.originalName}">
-          <button class="studio-file-remove" data-filename="${f.filename}" title="Remove">✕</button>
-        </div>
-        <input class="studio-file-tag-input" type="text" placeholder="${tagPlaceholder}" maxlength="80" value="${tagVal}" data-filename="${f.filename}" aria-label="Label for ${f.originalName}">`;
-    } else {
-      card.innerHTML = `
-        <div class="studio-file-thumb studio-file-thumb--doc">
-          <div class="studio-file-icon">
-            <div class="studio-file-icon-ext">${fileExt(f.originalName)}</div>
-            <div class="studio-file-icon-name">${f.originalName}</div>
-          </div>
-          <button class="studio-file-remove" data-filename="${f.filename}" title="Remove">✕</button>
-        </div>
-        <input class="studio-file-tag-input" type="text" placeholder="${tagPlaceholder}" maxlength="80" value="${tagVal}" data-filename="${f.filename}" aria-label="Label for ${f.originalName}">`;
-    }
-
+    const tagVal = (f.tag || '').replace(/"/g, '&quot;');
+    card.innerHTML = `
+      <div class="studio-file-thumb">
+        <img src="${f.previewSrc}" alt="${f.originalName}" title="${f.originalName}">
+        <button class="studio-file-remove" data-filename="${f.filename}" title="Remove">✕</button>
+      </div>
+      <input class="studio-file-tag-input" type="text" placeholder="Image label" maxlength="80" value="${tagVal}" data-filename="${f.filename}" aria-label="Label for ${f.originalName}">`;
     fileGrid.appendChild(card);
   }
 }
@@ -398,6 +373,8 @@ function renderAllFiles() {
   renderFileGrid();
   updateFileCountNote();
   populateThumbnailPicker();
+  // Refresh the active section's Add/Replace dropdowns so new uploads appear immediately
+  if (studioMode === 'edit') refreshImgDropdowns();
 }
 
 // ── Thumbnail picker ──────────────────────────────────────────────────────────
@@ -406,21 +383,23 @@ function populateThumbnailPicker() {
   const preview = $('studio-thumbnail-preview');
   if (!select) return;
 
-  const images  = state.uploadedFiles.filter(f => f.fileType === 'image');
-  const current = state.currentProject?.thumbnail || '';
+  const images = state.uploadedFiles.filter(f => f.fileType === 'image');
+  // Live DOM value takes priority — preserves the user's current selection across rebuilds
+  const current = select.value || state.currentProject?.thumbnail || '';
 
   select.innerHTML = '<option value="">— no thumbnail —</option>';
   images.forEach(f => {
-    const src  = f.permanentPath || f.previewSrc || '';
-    const label = f.tag || f.originalName || f.filename;
-    const opt  = document.createElement('option');
-    opt.value  = src;
-    opt.textContent = label;
-    if (src === current) opt.selected = true;
+    const src = f.permanentPath || f.previewSrc || '';
+    const opt = document.createElement('option');
+    opt.value = src;
+    opt.textContent = f.tag || f.originalName || f.filename;
     select.appendChild(opt);
   });
 
-  updateThumbnailPreview(current, preview);
+  // Restore selection by value — more reliable than opt.selected after innerHTML reset
+  select.value = current;
+
+  updateThumbnailPreview(select.value, preview);
 
   if (!select.dataset.listening) {
     select.dataset.listening = '1';
@@ -428,6 +407,7 @@ function populateThumbnailPicker() {
       const val = select.value;
       if (state.currentProject) state.currentProject.thumbnail = val;
       updateThumbnailPreview(val, preview);
+      if (studioMode === 'edit') scheduleAutoSave();
     });
   }
 }
@@ -444,7 +424,7 @@ function updateThumbnailPreview(src, preview) {
   }
 }
 
-// Tag changes (sidebar) — debounce sync to server
+// Tag changes (sidebar)
 const _tagDebounces = {};
 fileGrid.addEventListener('input', e => {
   const input = e.target.closest('.studio-file-tag-input');
@@ -452,9 +432,17 @@ fileGrid.addEventListener('input', e => {
   const f = state.uploadedFiles.find(f => f.filename === input.dataset.filename);
   if (!f) return;
   f.tag = input.value.slice(0, 80);
-  scheduleSave();
-  clearTimeout(_tagDebounces[f.filename]);
-  _tagDebounces[f.filename] = setTimeout(() => syncTag(f.filename, f.tag), 800);
+  if (studioMode === 'edit') {
+    // Write label back to section alt texts and persist to DB
+    if (f.permanentPath) updateImageLabel(f.permanentPath, f.tag);
+    populateThumbnailPicker();   // refresh dropdown labels without re-rendering the whole grid
+    refreshImgDropdowns();
+    scheduleAutoSave();
+  } else {
+    scheduleSave();
+    clearTimeout(_tagDebounces[f.filename]);
+    _tagDebounces[f.filename] = setTimeout(() => syncTag(f.filename, f.tag), 800);
+  }
 });
 
 async function syncTag(filename, tag) {
@@ -466,14 +454,12 @@ async function syncTag(filename, tag) {
   } catch { /* silent */ }
 }
 
-// Remove file (sidebar grid)
 fileGrid.addEventListener('click', async e => {
   const btn = e.target.closest('.studio-file-remove');
   if (!btn) return;
   await removeFile(btn.dataset.filename);
 });
 
-// Tag changes (pre-gen list) — update state so getTags() picks them up on Generate
 if (pregenFileList) {
   pregenFileList.addEventListener('input', e => {
     const input = e.target.closest('.studio-pregen-tag-input');
@@ -483,8 +469,6 @@ if (pregenFileList) {
     f.tag = input.value.slice(0, 80);
     scheduleSave();
   });
-
-  // Remove file (pre-gen list)
   pregenFileList.addEventListener('click', async e => {
     const btn = e.target.closest('.studio-pregen-file-remove');
     if (!btn) return;
@@ -493,11 +477,17 @@ if (pregenFileList) {
 }
 
 async function removeFile(filename) {
+  const f = state.uploadedFiles.find(f => f.filename === filename);
   try {
-    await apiFetch('/admin/studio/delete-upload', { filename });
+    if (studioMode === 'edit' && f?.permanentPath) {
+      // Delete the permanent project image from disk
+      await apiFetch('/admin/image/delete', { imagePath: f.permanentPath });
+    } else {
+      await apiFetch('/admin/studio/delete-upload', { filename });
+    }
     state.uploadedFiles = state.uploadedFiles.filter(f => f.filename !== filename);
     renderAllFiles();
-    saveToStorage();
+    if (studioMode !== 'edit') saveToStorage();
   } catch (err) {
     setStatus(state.generated ? uploadStatusSidebar : uploadStatus, err.message, true);
   }
@@ -514,15 +504,26 @@ async function uploadFile(file) {
   form.append('image', file);
 
   try {
-    const res = await fetch('/admin/studio/upload', {
-      method:  'POST',
-      headers: { 'Accept': 'application/json' },
-      body:    form,
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Upload failed');
-    state.uploadedFiles.push({ ...data.file, tag: '' });
-    renderAllFiles();
+    if (studioMode === 'edit') {
+      const res = await fetch(`/admin/upload/${encodeURIComponent(editSlug)}`, {
+        method: 'POST', headers: { Accept: 'application/json' }, body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      const filename = data.path.split('/').pop();
+      state.uploadedFiles.push({
+        filename, originalName: file.name, fileType: 'image',
+        previewSrc: data.path, permanentPath: data.path, fromEditor: false, tag: '',
+      });
+    } else {
+      const res = await fetch('/admin/studio/upload', {
+        method: 'POST', headers: { Accept: 'application/json' }, body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      state.uploadedFiles.push({ ...data.file, tag: '' });
+    }
+    renderAllFiles(); // also calls refreshImgDropdowns in edit mode
     saveToStorage();
     if (state.generated) openSection('files');
     setStatus(statusEl, '');
@@ -550,7 +551,6 @@ if (dropZone) {
   dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFiles(); } });
 }
 
-// Sidebar "Add files" button
 sidebarUploadBtn.addEventListener('click', () => pickFiles());
 if (description) description.addEventListener('input', scheduleSave);
 
@@ -573,12 +573,8 @@ if (generateBtn) generateBtn.addEventListener('click', async () => {
 
   try {
     const data = await apiFetch('/admin/studio/generate', {
-      description: desc,
-      provider:    state.provider,
-      model:       state.model,
-      tags:        getTags(),
+      description: desc, provider: state.provider, model: state.model, tags: getTags(),
     });
-
     stopLoadingTimer();
     await refreshPreview();
     onGenerated(data.project, data.summary);
@@ -602,8 +598,8 @@ function onGenerated(project, summary) {
 
 function updateSlug(slug) {
   if (!slug) return;
-  const clean             = slugify(slug);
-  slugInput.value         = clean;
+  const clean = slugify(slug);
+  slugInput.value = clean;
   slugPreview.textContent = clean;
 }
 
@@ -617,42 +613,80 @@ async function sendChatMessage() {
   const msg = chatInput.value.trim();
   if (msg.length < 2) return;
 
+  // In AI preview mode: check for acceptance before hitting the LLM
+  if (studioMode === 'edit' && state.pendingAiProject) {
+    if (ACCEPT_RE.test(msg)) {
+      chatInput.value = '';
+      appendBubble('user', msg);
+      appendBubble('assistant', 'Changes accepted and saved.');
+      await acceptAiChanges();
+      return;
+    }
+    // Otherwise: treat as a refinement of the pending AI suggestion (fall through)
+  }
+
   chatInput.value = '';
   appendBubble('user', msg);
   const thinkingBubble = appendBubble('assistant', '', { isThinking: true });
-
   lockButtons(true);
 
   try {
-    const data = await apiFetch('/admin/studio/refine', {
-      feedback:       msg,
-      provider:       state.provider,
-      model:          state.model,
-      tags:           getTags(),
-      currentProject: state.currentProject,
-      editorImages:   state.uploadedFiles.filter(f => f.fromEditor),
-      hadManualEdits: state.hasManualEdits,
-    });
+    let payload;
 
-    state.hasManualEdits = false;
+    if (studioMode === 'edit') {
+      const currentProject = readProjectFromDOM();
+      state.currentProject = currentProject;
+
+      // Always send the full current page state — server injects it before every user message
+      payload = {
+        feedback:       msg,
+        provider:       state.provider,
+        model:          state.model,
+        currentProject,
+        imageManifest:  state.uploadedFiles.map(f => ({
+          filename: (f.permanentPath || f.previewSrc || f.filename || '').split('/').pop(),
+          label:    f.tag || '',
+          src:      f.permanentPath || f.previewSrc || '',
+        })),
+        ...(state.chatAttachments.length ? { chatAttachments: state.chatAttachments } : {}),
+      };
+    } else {
+      payload = {
+        feedback:       msg,
+        provider:       state.provider,
+        model:          state.model,
+        tags:           getTags(),
+        currentProject: state.currentProject,
+        editorImages:   state.uploadedFiles.filter(f => f.fromEditor),
+      };
+    }
+
+    const data = await apiFetch('/admin/studio/refine', payload);
+
+    state.chatAttachments = [];
+    renderChatAttachments();
     thinkingBubble.remove();
     if (data.message) appendBubble('assistant', data.message);
 
-    if (data.regenerate) {
-      const oldSrc = previewFrame.srcdoc;
-      try {
-        if (data.project) state.currentProject = data.project;
+    if (data.regenerate && data.project) {
+      if (studioMode === 'edit') {
+        // Snapshot the current committed state before showing AI changes
+        if (!state.pendingAiProject) {
+          state.preAiProject = state.currentProject
+            ? JSON.parse(JSON.stringify(state.currentProject))
+            : null;
+        }
+        state.pendingAiProject = data.project;
+        state.currentProject   = data.project;
+        await refreshPreview();        // renders AI version
+        enterAiPreviewMode();          // orange banner, editing frozen
+        updateSlug(data.project?.slug);
+        if (data.project?.title) titleInput.value = data.project.title;
+      } else {
+        state.currentProject = data.project;
         await refreshPreview();
         updateSlug(data.project?.slug);
         if (data.project?.title) titleInput.value = data.project.title;
-        if (state.editModeActive) {
-          await new Promise(resolve => {
-            previewFrame.addEventListener('load', resolve, { once: true });
-          });
-          enableEditMode();
-        }
-      } catch {
-        previewFrame.srcdoc = oldSrc;
       }
     }
   } catch (err) {
@@ -669,32 +703,78 @@ chatInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
 });
 
-// ── Preview ───────────────────────────────────────────────────────────────────
-async function refreshPreview() {
-  if (studioMode === 'edit') {
-    // Edit mode: update the inline project content div
-    const res = await fetch('/admin/studio/preview', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-      body:    JSON.stringify({ project: state.currentProject }),
+// ── Chat file attachments (passed directly to LLM, never saved to server) ─────
+const chatAttachBtn   = $('studio-chat-attach-btn');
+const chatAttachInput = Object.assign(document.createElement('input'), {
+  type: 'file', multiple: true,
+  accept: 'image/*,.txt,.md,.csv,.json',
+});
+
+chatAttachBtn?.addEventListener('click', () => chatAttachInput.click());
+
+chatAttachInput.addEventListener('change', async () => {
+  for (const file of chatAttachInput.files) {
+    state.chatAttachments.push(await readChatAttachment(file));
+  }
+  chatAttachInput.value = '';
+  renderChatAttachments();
+});
+
+async function readChatAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    if (file.type.startsWith('image/')) {
+      reader.onload = () => resolve({
+        name: file.name, type: 'image',
+        mediaType: file.type || 'image/jpeg',
+        data: reader.result.split(',')[1],
+      });
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = () => resolve({ name: file.name, type: 'text', data: reader.result });
+      reader.readAsText(file);
+    }
+    reader.onerror = reject;
+  });
+}
+
+function renderChatAttachments() {
+  const el = $('studio-chat-attachments');
+  if (!el) return;
+  el.innerHTML = '';
+  state.chatAttachments.forEach((a, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'studio-chat-attach-chip';
+    chip.innerHTML = `${a.name} <button data-idx="${i}" aria-label="Remove">×</button>`;
+    chip.querySelector('button').addEventListener('click', () => {
+      state.chatAttachments.splice(i, 1);
+      renderChatAttachments();
     });
-    if (!res.ok) return;
-    const { html } = await res.json();
+    el.appendChild(chip);
+  });
+  el.style.display = state.chatAttachments.length ? 'flex' : 'none';
+}
+
+// ── Preview (generate mode: iframe; edit mode: inline DOM refresh after chat) ──
+async function refreshPreview() {
+  const res = await fetch('/admin/studio/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+    body: JSON.stringify({ project: state.currentProject }),
+  });
+  if (!res.ok) return;
+  const { html } = await res.json();
+
+  if (studioMode === 'edit') {
     const content = $('studio-preview-content');
     if (content) {
+      _imgActiveWrap = null;
+      _imgSelectedEl = null;
       content.innerHTML = html;
       makeTextEditable();
     }
   } else {
-    // Generate mode: render full page in iframe via srcdoc
-    const res = await fetch('/admin/studio/preview', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-      body:    JSON.stringify({ project: state.currentProject }),
-    });
     previewFrame.style.display = 'block';
-    if (!res.ok) return;
-    const { html } = await res.json();
     await new Promise(resolve => {
       previewFrame.addEventListener('load', resolve, { once: true });
       previewFrame.srcdoc = html;
@@ -702,7 +782,7 @@ async function refreshPreview() {
   }
 }
 
-// ── Publish & Save Draft ──────────────────────────────────────────────────────
+// ── Generate mode: publish & save draft ───────────────────────────────────────
 async function saveProject(asDraft) {
   if (state.generating) return;
   const slug  = slugify(slugInput.value);
@@ -711,31 +791,28 @@ async function saveProject(asDraft) {
     setStatus(publishStatus, 'Please enter a valid URL slug.', true);
     return;
   }
-
-  publishBtn.disabled = true;
-  draftBtn.disabled   = true;
-  discardBtn.disabled = true;
+  if (publishBtn) publishBtn.disabled = true;
+  if (draftBtn)   draftBtn.disabled   = true;
+  if (discardBtn) discardBtn.disabled = true;
   setStatus(publishStatus, asDraft ? 'Saving draft…' : 'Publishing…');
-
   try {
-    const endpoint = asDraft ? '/admin/studio/save-draft' : '/admin/studio/publish';
-    await apiFetch(endpoint, { slug, title });
+    await apiFetch(asDraft ? '/admin/studio/save-draft' : '/admin/studio/publish', { slug, title });
     clearStorage();
     setStatus(publishStatus, asDraft ? 'Draft saved! Redirecting…' : 'Published! Redirecting…');
     setTimeout(() => { window.location.href = '/admin/dashboard'; }, 900);
   } catch (err) {
     setStatus(publishStatus, err.message, true);
     publishBtn.disabled = false;
-    draftBtn.disabled   = false;
-    discardBtn.disabled = false;
+    if (draftBtn) draftBtn.disabled = false;
+    if (discardBtn) discardBtn.disabled = false;
   }
 }
 
-publishBtn.addEventListener('click', () => studioMode === 'edit' ? publishEdits() : saveProject(false));
-draftBtn.addEventListener('click',   () => studioMode === 'edit' ? saveDraftEdits() : saveProject(true));
+if (publishBtn) publishBtn.addEventListener('click', () => studioMode === 'edit' ? publishEdits() : saveProject(false));
+if (draftBtn) draftBtn.addEventListener('click', () => studioMode === 'edit' ? publishEdits() : saveProject(true));
 
 // ── Discard ───────────────────────────────────────────────────────────────────
-discardBtn.addEventListener('click', async () => {
+if (discardBtn) discardBtn.addEventListener('click', async () => {
   if (studioMode === 'edit') {
     window.location.href = '/admin/dashboard';
     return;
@@ -747,585 +824,788 @@ discardBtn.addEventListener('click', async () => {
   }
 });
 
-// ── Sidebar collapse ──────────────────────────────────────────────────────────
-function toggleSidebar() {
-  state.sidebarCollapsed = !state.sidebarCollapsed;
-  studioWrap.classList.toggle('sidebar-collapsed', state.sidebarCollapsed);
-}
 
-$('studio-collapse-btn')?.addEventListener('click', toggleSidebar);
-if (sidebarToggleBtn) sidebarToggleBtn.addEventListener('click', toggleSidebar);
+// ═══════════════════════════════════════════════════════════════════════════════
+// EDIT MODE
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Edit mode: init ───────────────────────────────────────────────────────────
 function initEditMode(project) {
   state.currentProject = project;
-  state.generated = true;
+  state.generated      = true;
 
-  studioWrap.classList.add('is-generated', 'sidebar-collapsed');
+  studioWrap.classList.add('is-generated');
   updateSlug(project?.slug);
   if (project?.title) titleInput.value = project.title;
   openSection('publish');
 
+  // Auto-save when the homepage card title changes
+  if (titleInput && !titleInput.dataset.editListening) {
+    titleInput.dataset.editListening = '1';
+    titleInput.addEventListener('input', () => {
+      if (state.currentProject) state.currentProject.title = titleInput.value.trim();
+      scheduleAutoSave();
+    });
+  }
+
+  // Populate sidebar image bank with existing project images
   populateProjectFiles(project);
   renderAllFiles();
   updateFileCountNote();
 
-  // Project HTML is already in the DOM (server-side rendered) — just activate editing
+  // Activate inline editing on the server-rendered project DOM
   makeTextEditable();
+}
 
-  if (hasDraft) {
-    const discardEl = document.createElement('button');
-    discardEl.className = 'btn btn-sm btn-ghost studio-full-btn';
-    discardEl.style.marginTop = '8px';
-    discardEl.textContent = 'Discard Draft';
-    discardEl.addEventListener('click', discardDraftEdits);
-    $('section-publish-body')?.appendChild(discardEl);
+// ── Edit mode: populate sidebar from all images in the project folder ─────────
+function populateProjectFiles(project) {
+  // Build src → alt map from section data so labels survive a page reload
+  const altMap = new Map();
+  for (const sec of (project.sections || []))
+    for (const img of (sec.images || []))
+      if (img.src && img.alt) altMap.set(img.src, img.alt);
+
+  const seen = new Set(state.uploadedFiles.map(f => f.permanentPath).filter(Boolean));
+  const add = (src, fallbackLabel) => {
+    if (!src) return;
+    const resolvedTag = altMap.get(src) || fallbackLabel || '';
+    if (seen.has(src)) {
+      // Already added (e.g. by folder scan with empty tag) — backfill label if we now know it
+      if (resolvedTag) {
+        const existing = state.uploadedFiles.find(f => f.permanentPath === src);
+        if (existing && !existing.tag) existing.tag = resolvedTag;
+      }
+      return;
+    }
+    seen.add(src);
+    const fn = src.split('/').pop();
+    state.uploadedFiles.push({
+      filename: fn, originalName: fn, fileType: 'image',
+      previewSrc: src, permanentPath: src, fromEditor: false,
+      tag: resolvedTag,
+    });
+  };
+
+  // Load ALL images from the project's folder (server-scanned list)
+  const folderEl = document.getElementById('studio-folder-images');
+  if (folderEl) {
+    try {
+      const folderImages = JSON.parse(folderEl.textContent);
+      folderImages.forEach(src => add(src, ''));
+    } catch { /* ignore parse errors */ }
+  }
+
+  // Ensure thumbnail and section images are included even if missing from folder scan.
+  // Use thumbnailAlt (persisted in DB) as the thumbnail's label.
+  if (project.thumbnail) add(project.thumbnail, project.thumbnailAlt || '');
+  for (const sec of (project.sections || []))
+    for (const img of (sec.images || [])) add(img.src, img.alt || '');
+}
+
+
+// Update alt text for an image across all sections and the sidebar state
+function updateImageLabel(src, label) {
+  const project = state.currentProject;
+  if (project) {
+    // Persist thumbnail label via thumbnailAlt (stored in DB)
+    if (project.thumbnail === src) project.thumbnailAlt = label;
+    // Persist section image labels via alt text
+    for (const sec of (project.sections || []))
+      for (const img of (sec.images || []))
+        if (img.src === src) img.alt = label;
+  }
+  // Also update DOM img elements so the live preview reflects it immediately
+  const scope = $('studio-preview-content');
+  if (scope) {
+    scope.querySelectorAll(`.project-section-images img[src="${CSS.escape(src)}"]`).forEach(el => {
+      el.alt = label;
+      el.title = label;
+    });
   }
 }
 
-// ── Edit mode: make text fields contenteditable ───────────────────────────────
+// ── Edit mode: read current project from DOM (single source of truth) ─────────
+function readProjectFromDOM() {
+  const scope    = $('studio-preview-content');
+  const stateSecs = state.currentProject?.sections || [];
+  const sections  = [];
+
+  (scope?.querySelectorAll('[data-section-id]') || []).forEach(container => {
+    // Only process real section containers (must contain a .project-section)
+    if (!container.querySelector('.project-section')) return;
+    const sectionId = container.dataset.sectionId;
+    const stateSec  = stateSecs.find(s => String(s.id) === String(sectionId));
+    const headingEl = container.querySelector('.project-section__heading');
+    const bodyEl    = container.querySelector('.project-section__body');
+    const imgEls    = [...container.querySelectorAll('.project-section-images img')];
+    sections.push({
+      id:      sectionId,
+      heading: headingEl?.textContent.trim() || stateSec?.heading || '',
+      body:    bodyEl
+        ? bodyEl.innerHTML.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim()
+        : (stateSec?.body || ''),
+      images:  imgEls.map(img => ({ src: img.getAttribute('src') || '', alt: img.alt || '' })).filter(i => i.src),
+      cols:    stateSec?.cols ?? 0,
+    });
+  });
+
+  return {
+    ...(state.currentProject || {}),
+    pageTitle: scope?.querySelector('.project-title')?.textContent.trim()    || state.currentProject?.pageTitle || '',
+    subtitle:  scope?.querySelector('.project-subtitle')?.textContent.trim() || state.currentProject?.subtitle  || '',
+    sections,
+  };
+}
+
+// ── Edit mode: save to DB (no redirect) ──────────────────────────────────────
+let _saving = false;
+let _pendingSave = false;
+
+async function saveEdit() {
+  if (_saving) { _pendingSave = true; return; }
+  _saving = true;
+
+  const project = readProjectFromDOM();
+  const totalImgs = project.sections.reduce((t, s) => t + s.images.length, 0);
+  setStatus(publishStatus, `Saving…`);
+
+  try {
+    await apiFetch(`/admin/projects/${encodeURIComponent(editSlug)}/publish-edits`, { project });
+    setStatus(publishStatus, `Saved (${project.sections.length} sections, ${totalImgs} images)`);
+    setTimeout(() => setStatus(publishStatus, ''), 3000);
+  } catch (err) {
+    // If session expired, show a clear message
+    const msg = err.message.includes('403') || err.message.includes('Forbidden') || err.message.includes('login')
+      ? 'Session expired — please refresh and log back in'
+      : err.message;
+    setStatus(publishStatus, msg, true);
+  } finally {
+    _saving = false;
+    if (_pendingSave) { _pendingSave = false; saveEdit(); }
+  }
+}
+
+let _autoSaveTimer = null;
+function scheduleAutoSave() {
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(saveEdit, 800);
+}
+
+// ── Edit mode: publish = save + redirect ──────────────────────────────────────
+async function publishEdits() {
+  if (publishBtn) publishBtn.disabled = true;
+  setStatus(publishStatus, 'Saving…');
+  try {
+    const project   = readProjectFromDOM();
+    const totalImgs = project.sections.reduce((t, s) => t + s.images.length, 0);
+    await apiFetch(`/admin/projects/${encodeURIComponent(editSlug)}/publish-edits`, { project });
+    setStatus(publishStatus, `Saved (${project.sections.length} sections, ${totalImgs} images) — returning…`);
+    setTimeout(() => { window.location.href = '/admin/dashboard'; }, 1200);
+  } catch (err) {
+    const msg = err.message.includes('403') || err.message.includes('Forbidden') || err.message.includes('login')
+      ? 'Session expired — please refresh and log back in'
+      : err.message;
+    setStatus(publishStatus, msg, true);
+    if (publishBtn) publishBtn.disabled = false;
+  }
+}
+
+// ── Edit mode: activate text + image editing on the preview DOM ───────────────
 function makeTextEditable() {
   activateEditing($('studio-preview-content'));
 }
 
-// ── Edit mode: populate sidebar files from project images ─────────────────────
-function populateProjectFiles(project) {
-  const seen = new Set(state.uploadedFiles.map(f => f.permanentPath).filter(Boolean));
+// ── AI preview mode (orange banner, editing frozen until accept/discard) ───────
+const ACCEPT_RE = /^(yes|yep|yup|ok|okay|sure|good|great|perfect|looks good|love it|accept|approve|go ahead|save|save it|commit|apply|keep|keep it|that works|that's good|done|correct|right|solid|ship it|lgtm)\W*$/i;
 
-  const add = (src, label) => {
-    if (!src || seen.has(src)) return;
-    seen.add(src);
-    const fn = src.split('/').pop();
-    state.uploadedFiles.push({
-      filename:     fn,
-      originalName: fn,
-      fileType:     'image',
-      previewSrc:   src,
-      permanentPath: src,
-      fromEditor:   false,
-      tag:          label || '',
-    });
-  };
-
-  if (project.thumbnail) add(project.thumbnail, 'Thumbnail');
-  for (const sec of (project.sections || [])) {
-    for (const img of (sec.images || [])) add(img.src, img.alt || '');
-  }
-}
-
-// ── Edit mode: enable (inject editing UI into iframe) ────────────────────────
-async function enableEditMode() {
-  const doc = previewFrame.contentDocument;
-  if (!doc || !doc.body) return;
-  state.editModeActive = true;
-  doc.body.setAttribute('data-edit-mode', '');
-  if (!doc.getElementById('studio-edit-style')) {
-    const link = doc.createElement('link');
-    link.id = 'studio-edit-style';
-    link.rel = 'stylesheet';
-    link.href = '/css/studio-editing.css';
-    await new Promise(resolve => {
-      link.addEventListener('load', resolve, { once: true });
-      link.addEventListener('error', resolve, { once: true });
-      doc.head.appendChild(link);
-    });
-  }
-  injectEditingIntoIframe(doc);
-}
-
-// ── Edit mode: disable ────────────────────────────────────────────────────────
-function disableEditMode() {
-  const doc = previewFrame.contentDocument;
-  if (doc && doc.body) {
-    syncFromDOM(doc);
-    state.hasManualEdits = true;
-    doc.body.removeAttribute('data-edit-mode');
-    const styleLink = doc.getElementById('studio-edit-style');
-    if (styleLink) styleLink.remove();
-    doc.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
-    doc.querySelectorAll('.edit-img-wrap').forEach(wrap => {
-      const img = wrap.querySelector('img');
-      if (img) wrap.parentNode.insertBefore(img, wrap);
-      wrap.remove();
-    });
-    doc.querySelectorAll('.edit-section-bar, .edit-img-controls, .edit-add-img, .edit-add-section').forEach(el => el.remove());
-    doc.querySelectorAll('.edit-section-wrap').forEach(el => el.classList.remove('edit-section-wrap'));
-    doc.querySelectorAll('.edit-section-drop-above, .edit-section-drop-below').forEach(el => {
-      el.classList.remove('edit-section-drop-above', 'edit-section-drop-below');
-    });
-  }
-  state.editModeActive = false;
-}
-
-// ── Edit mode: sync DOM → state ───────────────────────────────────────────────
-let _syncDebounce;
-function syncFromDOM() {
+function enterAiPreviewMode() {
   const scope = $('studio-preview-content');
-  if (!scope || !state.currentProject) return;
-
-  const titleEl = scope.querySelector('.project-title');
-  if (titleEl) state.currentProject.pageTitle = titleEl.textContent.trim();
-
-  const subtitleEl = scope.querySelector('.project-subtitle');
-  if (subtitleEl) state.currentProject.subtitle = subtitleEl.textContent.trim();
-
-  const sections = state.currentProject.sections;
-  scope.querySelectorAll('[data-section-id]').forEach(container => {
-    const sectionId = container.dataset.sectionId;
-    const sec = sections.find(s => String(s.id) === String(sectionId));
-    if (!sec) return;
-    const headingEl = container.querySelector('.project-section__heading');
-    if (headingEl) sec.heading = headingEl.textContent.trim();
-    const bodyEl = container.querySelector('.project-section__body');
-    if (bodyEl) {
-      sec.body = bodyEl.innerHTML
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<[^>]+>/g, '')
-        .trim();
-    }
-    const imgEls = [...container.querySelectorAll('.project-section-images img')];
-    sec.images = imgEls.map(img => ({
-      src: img.getAttribute('src') || '',
-      alt: img.alt || '',
-    })).filter(img => img.src);
+  if (!scope) return;
+  scope.classList.add('is-ai-preview');
+  // Freeze all contenteditable elements
+  scope.querySelectorAll('[contenteditable="true"]').forEach(el => {
+    el.contentEditable = 'false';
+    el.dataset.wasEditable = '1';
   });
-}
-
-function scheduleSync() {
-  clearTimeout(_syncDebounce);
-  _syncDebounce = setTimeout(syncFromDOM, 100);
-}
-
-// ── Edit mode: inject UI into iframe ─────────────────────────────────────────
-let _dragImgSrc = null;
-let _dragImgSection = null;
-
-function injectEditingIntoIframe(doc) {
-  const containers = [...doc.querySelectorAll('main > .container')];
-  if (!containers.length) return;
-
-  const headerContainer = containers[0];
-  const sectionContainers = containers.slice(1);
-
-  // Header: make title/subtitle contenteditable
-  const titleEl = headerContainer.querySelector('.project-title');
-  if (titleEl) {
-    titleEl.contentEditable = 'true';
-    titleEl.dataset.placeholder = 'Project title';
+  // Swap hint bar to orange
+  const hint = scope.querySelector('.studio-edit-hint');
+  if (hint) {
+    hint.className = 'studio-edit-hint is-ai-preview';
+    hint.innerHTML =
+      '<span>Showing AI suggested changes</span>' +
+      '<button class="studio-ai-accept-btn" aria-label="Accept AI changes">✓ Accept</button>' +
+      '<button class="studio-ai-discard-btn" aria-label="Discard AI changes">✕ Discard</button>';
+    hint.style.pointerEvents = 'auto';
+    hint.querySelector('.studio-ai-accept-btn').addEventListener('click', acceptAiChanges);
+    hint.querySelector('.studio-ai-discard-btn').addEventListener('click', discardAiChanges);
   }
-  let subtitleEl = headerContainer.querySelector('.project-subtitle');
-  if (!subtitleEl) {
-    subtitleEl = doc.createElement('p');
-    subtitleEl.className = 'project-subtitle';
-    headerContainer.querySelector('.project-header')?.appendChild(subtitleEl);
+}
+
+function exitAiPreviewMode() {
+  const scope = $('studio-preview-content');
+  if (!scope) return;
+  scope.classList.remove('is-ai-preview');
+  // Restore contenteditable
+  scope.querySelectorAll('[data-was-editable]').forEach(el => {
+    el.contentEditable = 'true';
+    delete el.dataset.wasEditable;
+  });
+  // Restore hint bar
+  const hint = scope.querySelector('.studio-edit-hint');
+  if (hint) {
+    hint.className = 'studio-edit-hint';
+    hint.textContent = 'Click any text to edit';
+    hint.style.pointerEvents = 'none';
   }
-  subtitleEl.contentEditable = 'true';
-  subtitleEl.dataset.placeholder = 'Project subtitle';
+  state.pendingAiProject = null;
+  state.preAiProject     = null;
+}
 
-  // Sections
-  const sections = state.currentProject?.sections || [];
-  sectionContainers.forEach((container, i) => {
-    const sec = sections[i];
-    if (!sec) return;
-    container.dataset.sectionId = sec.id;
-    container.classList.add('edit-section-wrap');
+async function acceptAiChanges() {
+  await saveEdit();
+  exitAiPreviewMode();
+}
 
-    // Section bar
-    const bar = doc.createElement('div');
-    bar.className = 'edit-section-bar';
-    const dragHandle = doc.createElement('span');
-    dragHandle.className = 'edit-section-drag';
-    dragHandle.title = 'Drag to reorder';
-    dragHandle.textContent = '⠿';
-    dragHandle.draggable = true;
-    const deleteBtn = doc.createElement('button');
-    deleteBtn.className = 'edit-section-delete';
-    deleteBtn.title = 'Delete section';
-    deleteBtn.textContent = '✕';
-    deleteBtn.addEventListener('click', () => deleteSection(sec.id, doc));
-    bar.appendChild(dragHandle);
-    bar.appendChild(deleteBtn);
-    container.insertBefore(bar, container.firstChild);
-
-    // Section drag-to-reorder
-    dragHandle.addEventListener('dragstart', e => {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/x-section-id', sec.id);
-      requestAnimationFrame(() => container.classList.add('drag-source-section'));
-    });
-    dragHandle.addEventListener('dragend', () => {
-      container.classList.remove('drag-source-section');
-      doc.querySelectorAll('.edit-section-drop-above, .edit-section-drop-below').forEach(el => {
-        el.classList.remove('edit-section-drop-above', 'edit-section-drop-below');
-      });
-    });
-    container.addEventListener('dragover', e => {
-      if (!e.dataTransfer.types.includes('text/x-section-id')) return;
-      e.preventDefault();
-      doc.querySelectorAll('.edit-section-drop-above, .edit-section-drop-below').forEach(el => {
-        el.classList.remove('edit-section-drop-above', 'edit-section-drop-below');
-      });
-      const mid = container.getBoundingClientRect().top + container.offsetHeight / 2;
-      container.classList.add(e.clientY < mid ? 'edit-section-drop-above' : 'edit-section-drop-below');
-    });
-    container.addEventListener('dragleave', e => {
-      if (!container.contains(e.relatedTarget)) {
-        container.classList.remove('edit-section-drop-above', 'edit-section-drop-below');
-      }
-    });
-    container.addEventListener('drop', e => {
-      const srcId = e.dataTransfer.getData('text/x-section-id');
-      if (!srcId || srcId === sec.id) return;
-      e.preventDefault();
-      const isBefore = container.classList.contains('edit-section-drop-above');
-      container.classList.remove('edit-section-drop-above', 'edit-section-drop-below');
-      moveSectionInDOM(srcId, sec.id, isBefore, doc);
-    });
-
-    // Section text editing
-    const sectionEl = container.querySelector('.project-section');
-    if (sectionEl) {
-      let headingEl = sectionEl.querySelector('.project-section__heading');
-      if (!headingEl) {
-        headingEl = doc.createElement('h2');
-        headingEl.className = 'project-section__heading';
-        sectionEl.insertBefore(headingEl, sectionEl.firstChild);
-      }
-      headingEl.contentEditable = 'true';
-      headingEl.dataset.placeholder = 'Section heading';
-
-      let bodyEl = sectionEl.querySelector('.project-section__body');
-      if (!bodyEl) {
-        bodyEl = doc.createElement('div');
-        bodyEl.className = 'project-section__body';
-        const firstImgCon = sectionEl.querySelector('.project-section-images');
-        sectionEl.insertBefore(bodyEl, firstImgCon || null);
-      }
-      bodyEl.contentEditable = 'true';
-      bodyEl.dataset.placeholder = 'Section body text';
-
-      // Images
-      const imgContainers = [...sectionEl.querySelectorAll('.project-section-images')];
-      imgContainers.forEach(imgContainer => {
-        [...imgContainer.querySelectorAll('img')].forEach(img => wrapImageForEdit(doc, img, sec.id));
-        addImageButton(doc, imgContainer, sec.id);
-        wireImgDropZone(imgContainer, sec.id, doc);
-      });
-      if (!imgContainers.length) {
-        const imgCon = doc.createElement('div');
-        imgCon.className = 'project-section-images';
-        sectionEl.appendChild(imgCon);
-        addImageButton(doc, imgCon, sec.id);
-        wireImgDropZone(imgCon, sec.id, doc);
-      }
+async function discardAiChanges() {
+  const old = state.preAiProject;
+  if (!old) { exitAiPreviewMode(); return; }
+  state.currentProject = old;
+  // Re-render from the pre-AI snapshot
+  const res = await fetch('/admin/studio/preview', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+    body:    JSON.stringify({ project: old }),
+  });
+  if (res.ok) {
+    const { html } = await res.json();
+    const content = $('studio-preview-content');
+    if (content) {
+      _imgActiveWrap = null;
+      _imgSelectedEl = null;
+      content.innerHTML = html;
+      delete content.dataset.editListening; // allow listeners to re-register on fresh DOM
+      exitAiPreviewMode();
+      makeTextEditable();
     }
-  });
-
-  // Add-section buttons between and after sections
-  rebuildAddSectionButtons(doc);
-
-  // Debounced input → sync
-  doc.addEventListener('input', e => {
-    if (!e.target.isContentEditable) return;
-    scheduleSync(doc);
-  });
+  } else {
+    exitAiPreviewMode();
+  }
 }
 
-function wrapImageForEdit(doc, img, sectionId) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'edit-img-wrap';
-  wrap.draggable = true;
+function activateEditing(scope) {
+  if (!scope) return;
 
-  const controls = doc.createElement('div');
-  controls.className = 'edit-img-controls';
-  const removeBtn = doc.createElement('button');
-  removeBtn.className = 'edit-img-remove';
-  removeBtn.title = 'Remove image';
-  removeBtn.textContent = '✕';
-  removeBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    const src = img.getAttribute('src');
-    for (const sec of (state.currentProject?.sections || [])) {
-      const idx = sec.images.findIndex(i => i.src === src);
-      if (idx !== -1) { sec.images.splice(idx, 1); break; }
-    }
-    wrap.remove();
-    scheduleSync();
-  });
-  controls.appendChild(removeBtn);
-  img.parentNode.insertBefore(wrap, img);
-  wrap.appendChild(img);
-  wrap.appendChild(controls);
+  // "Click to edit" hint bar
+  if (!scope.querySelector('.studio-edit-hint')) {
+    const hint = document.createElement('div');
+    hint.className = 'studio-edit-hint';
+    hint.textContent = 'Click any text to edit';
+    scope.insertBefore(hint, scope.firstChild);
+  }
 
-  wrap.addEventListener('dragstart', e => {
-    _dragImgSrc = img.getAttribute('src');
-    _dragImgSection = sectionId;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/x-img-drag', '1');
-    requestAnimationFrame(() => wrap.classList.add('drag-source'));
+  // Make title/subtitle contenteditable
+  [
+    ['.project-title',    'Project title'],
+    ['.project-subtitle', 'Project subtitle'],
+  ].forEach(([sel, ph]) => {
+    const el = scope.querySelector(sel);
+    if (el) { el.contentEditable = 'true'; el.dataset.placeholder = ph; }
   });
-  wrap.addEventListener('dragend', () => {
-    _dragImgSrc = null;
-    _dragImgSection = null;
-    wrap.classList.remove('drag-source');
+
+  // Make section headings and bodies contenteditable
+  scope.querySelectorAll('.project-section').forEach(sec => {
+    const h = sec.querySelector('.project-section__heading');
+    const b = sec.querySelector('.project-section__body');
+    if (h) { h.contentEditable = 'true'; h.dataset.placeholder = 'Section heading'; }
+    if (b) { b.contentEditable = 'true'; b.dataset.placeholder = 'Section body'; }
   });
+
+  // Auto-save 800ms after typing stops in any contenteditable
+  if (!scope.dataset.editListening) {
+    scope.dataset.editListening = '1';
+    scope.addEventListener('input', scheduleAutoSave);
+    scope.addEventListener('blur', e => {
+      if (e.target.isContentEditable) scheduleAutoSave();
+    }, true); // capture so blur reaches us even though it doesn't bubble
+  }
+
+  makeImagesEditable(scope);
+  applyJustifiedRows(scope);
+
+  // "Add Section" button (once)
+  if (!scope.querySelector('.studio-add-section-btn')) {
+    const btn = document.createElement('button');
+    btn.className = 'studio-add-section-btn';
+    btn.textContent = '+ Add Section';
+    btn.addEventListener('click', e => { e.stopPropagation(); addSection(); });
+    scope.appendChild(btn);
+  }
 }
 
-function addImageButton(doc, imgContainer, sectionId) {
-  const btn = doc.createElement('button');
-  btn.className = 'edit-add-img';
-  btn.textContent = '+ Add image';
-  imgContainer.appendChild(btn);
-  btn.addEventListener('click', async () => {
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = 'image/jpeg,image/png,image/gif,image/webp';
-    inp.style.cssText = 'position:fixed;top:-200vh;left:-200vw;width:0;height:0;opacity:0;';
-    document.body.appendChild(inp);
-    inp.addEventListener('change', async () => {
-      const file = inp.files[0];
-      inp.remove();
-      if (!file) return;
-      const fd = new FormData();
-      fd.append('image', file);
-      try {
-        const res = await fetch(`/admin/upload/${encodeURIComponent(editSlug)}`, {
-          method: 'POST',
-          headers: { 'X-CSRF-Token': csrf() },
-          body: fd,
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Upload failed');
-        const newImg = doc.createElement('img');
-        newImg.src = data.path;
-        newImg.alt = '';
-        newImg.loading = 'lazy';
-        imgContainer.insertBefore(newImg, btn);
-        wrapImageForEdit(doc, newImg, sectionId);
-        const filename = data.path.split('/').pop();
-        state.uploadedFiles.push({
-          filename,
-          originalName: file.name,
-          fileType: 'image',
-          previewSrc: data.path,
-          fromEditor: true,
-          permanentPath: data.path,
-          tag: '',
-        });
-        renderAllFiles();
-        saveToStorage();
-        scheduleSync(doc);
-      } catch (err) {
-        console.error('Image upload failed:', err.message);
-      }
-    });
-    window.addEventListener('focus', () => setTimeout(() => inp.remove(), 300), { once: true });
-    inp.click();
-  });
-}
-
-function wireImgDropZone(imgContainer, sectionId, doc) {
-  imgContainer.addEventListener('dragover', e => {
-    if (!e.dataTransfer.types.includes('text/x-img-drag')) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  });
-  imgContainer.addEventListener('drop', e => {
-    if (!_dragImgSrc) return;
-    e.preventDefault();
-    const addBtn = imgContainer.querySelector('.edit-add-img');
-    if (_dragImgSection !== sectionId) {
-      const srcContainer = doc.querySelector(`main > .container[data-section-id="${_dragImgSection}"] .project-section-images .drag-source`);
-      if (srcContainer) {
-        imgContainer.insertBefore(srcContainer, addBtn || null);
-        const sections = state.currentProject?.sections || [];
-        const fromSec = sections.find(s => s.id === _dragImgSection);
-        const toSec   = sections.find(s => s.id === sectionId);
-        if (fromSec && toSec) {
-          const idx = fromSec.images.findIndex(i => i.src === _dragImgSrc);
-          if (idx !== -1) {
-            const [imgData] = fromSec.images.splice(idx, 1);
-            toSec.images.push(imgData);
-          }
+// ── Justified image rows (mirrors main.js) ────────────────────────────────────
+function applyJustifiedRows(scope) {
+  (scope || document).querySelectorAll('.project-section-images').forEach(row => {
+    const imgs = [...row.querySelectorAll('img')];
+    if (imgs.length < 2) return;
+    imgs.forEach(img => {
+      const size = () => {
+        if (img.naturalWidth > 0) {
+          img.style.flex  = `${img.naturalWidth / img.naturalHeight} 1 0%`;
+          img.style.width = '0';
         }
-      }
+      };
+      if (img.complete && img.naturalWidth > 0) size();
+      else img.addEventListener('load', size, { once: true });
+    });
+  });
+}
+
+// ── Section lookup ────────────────────────────────────────────────────────────
+function getSec(sectionId) {
+  const sec = state.currentProject?.sections?.find(s => String(s.id) === String(sectionId));
+  if (!sec) {
+    const known = state.currentProject?.sections?.map(s => s.id) || [];
+    console.warn('[studio] getSec: no match for', sectionId, '— known IDs:', known);
+    setStatus(uploadStatusSidebar, 'Section not found — please refresh the page', true);
+  }
+  return sec || null;
+}
+
+// ── Wrap image areas for editing ──────────────────────────────────────────────
+function makeImagesEditable(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('[data-section-id]').forEach(container => {
+    const section = container.querySelector('.project-section');
+    if (!section || section.querySelector('.img-section-wrap')) return; // already wrapped
+
+    const existingRows = [...section.querySelectorAll('.project-section-images')];
+    const wrap = document.createElement('div');
+    wrap.className = 'img-section-wrap';
+
+    if (existingRows.length > 0) {
+      existingRows[0].before(wrap);
+      existingRows.forEach(r => wrap.appendChild(r));
     } else {
-      const draggedWrap = imgContainer.querySelector('.drag-source');
-      const dropTarget  = e.target.closest?.('.edit-img-wrap');
-      if (draggedWrap && dropTarget && dropTarget !== draggedWrap) {
-        imgContainer.insertBefore(draggedWrap, dropTarget);
-      }
+      section.appendChild(wrap);
+      wrap.appendChild(makeImgPlaceholder());
     }
-    scheduleSync(doc);
+
+    const bar = buildImgEditBar(container);
+    wrap.appendChild(bar);
+
+    wrap.addEventListener('click', e => {
+      e.stopPropagation();
+      activateImgSection(wrap, container.dataset.sectionId);
+      const img = e.target.closest('img');
+      if (img) setSelectedImg(img, wrap);
+      else     clearSelectedImg(wrap);
+    });
+  });
+
+  // Global click — deactivate section when clicking outside any wrap
+  if (!scope.dataset.imgListening) {
+    scope.dataset.imgListening = '1';
+    scope.addEventListener('click', e => {
+      if (!e.target.closest('.img-section-wrap')) deactivateImgSection();
+    });
+  }
+}
+
+// ── Refresh active section's Add/Replace dropdowns ────────────────────────────
+function refreshImgDropdowns() {
+  if (!_imgActiveWrap) return;
+  const container = _imgActiveWrap.closest('[data-section-id]');
+  if (container) activateImgSection(_imgActiveWrap, container.dataset.sectionId);
+}
+
+// ── Import a new image directly into a section ────────────────────────────────
+function importImageToSection(container, sectionId) {
+  const inp = document.createElement('input');
+  inp.type   = 'file';
+  inp.accept = 'image/jpeg,image/png,image/gif,image/webp';
+  inp.style.cssText = 'position:fixed;top:-200vh;left:-200vw;width:0;height:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(inp);
+
+  const cleanup = () => { try { inp.remove(); } catch {} };
+  window.addEventListener('focus', function onFocus() {
+    window.removeEventListener('focus', onFocus);
+    setTimeout(cleanup, 300);
+  }, { once: true });
+
+  inp.addEventListener('change', async () => {
+    cleanup();
+    const file = inp.files[0];
+    if (!file) return;
+    setStatus(uploadStatusSidebar, `Uploading ${file.name}…`);
+    try {
+      const form = new FormData();
+      form.append('image', file);
+      const res = await fetch(`/admin/upload/${encodeURIComponent(editSlug)}`, {
+        method: 'POST', headers: { Accept: 'application/json' }, body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      const src      = data.path;
+      const filename = src.split('/').pop();
+
+      // Add to image bank if not already there
+      if (!state.uploadedFiles.some(f => f.permanentPath === src)) {
+        state.uploadedFiles.push({
+          filename, originalName: file.name, fileType: 'image',
+          previewSrc: src, permanentPath: src, fromEditor: false, tag: '',
+        });
+        renderFileGrid();
+        updateFileCountNote();
+        populateThumbnailPicker();
+      }
+
+      // Add the image to this section
+      appendImgToSection(container, sectionId, src);
+      setStatus(uploadStatusSidebar, '');
+    } catch (err) {
+      setStatus(uploadStatusSidebar, err.message, true);
+    }
+  });
+
+  inp.click();
+}
+
+// ── Low-level: render an images array into a wrap element ────────────────────
+// Does NOT require state — takes explicit images and cols values.
+function renderImagesIntoWrap(wrap, images, cols) {
+  const bar = wrap.querySelector('.img-edit-bar');
+  wrap.querySelectorAll('.project-section-images').forEach(r => r.remove());
+  wrap.querySelector('.img-add-placeholder')?.remove();
+
+  if (!images.length) {
+    wrap.insertBefore(makeImgPlaceholder(), bar);
+  } else {
+    const rows = (cols > 0)
+      ? Array.from({ length: Math.ceil(images.length / cols) }, (_, i) => images.slice(i * cols, i * cols + cols))
+      : [images];
+    rows.forEach(rowImgs => {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'project-section-images';
+      rowImgs.forEach(imgData => {
+        if (!imgData.src) return;
+        const img = document.createElement('img');
+        img.setAttribute('src', imgData.src);
+        img.alt      = imgData.alt || '';
+        img.loading  = 'lazy';
+        img.decoding = 'async';
+        rowEl.appendChild(img);
+      });
+      wrap.insertBefore(rowEl, bar);
+    });
+  }
+
+  _imgSelectedEl = null;
+  wrap.querySelector('.img-edit-img-controls')?.classList.remove('is-visible');
+  wrap.querySelectorAll('.img-edit-perrow-btn').forEach(btn => {
+    btn.classList.toggle('is-active', parseInt(btn.dataset.cols) === cols);
+  });
+  applyJustifiedRows(wrap);
+}
+
+// ── Append an image (by src) to a section — works even if state is missing ───
+function appendImgToSection(container, sectionId, src) {
+  const wrap = container.querySelector('.img-section-wrap');
+  if (!wrap) return;
+
+  // Read current images from DOM (the authoritative source)
+  const domImgs = [...wrap.querySelectorAll('.project-section-images img')];
+  const sec     = getSec(sectionId); // may be null — that's OK
+  const cols    = sec?.cols ?? 0;
+
+  const newImages = [
+    ...domImgs.map(img => ({ src: img.getAttribute('src'), alt: img.alt || '' })),
+    { src, alt: sec?.heading || '' },
+  ];
+
+  // Update state if available (enables move/remove to work via state later)
+  if (sec) sec.images = newImages;
+
+  // Render to DOM — this is what readProjectFromDOM reads
+  renderImagesIntoWrap(wrap, newImages, cols);
+  refreshImgDropdowns();
+  // Auto-save immediately whenever an image is added
+  saveEdit();
+}
+
+// ── Build the image toolbar for one section ───────────────────────────────────
+function buildImgEditBar(container) {
+  const sectionId = container.dataset.sectionId;
+  const bar = document.createElement('div');
+  bar.className = 'img-edit-bar';
+
+  bar.innerHTML = `
+    <div class="img-edit-group">
+      <span class="img-edit-label">Per row</span>
+      <div class="img-edit-perrow-btns">
+        <button class="img-edit-perrow-btn" data-cols="1">1</button>
+        <button class="img-edit-perrow-btn" data-cols="2">2</button>
+        <button class="img-edit-perrow-btn" data-cols="3">3</button>
+        <button class="img-edit-perrow-btn" data-cols="4">4</button>
+        <button class="img-edit-perrow-btn" data-cols="0">All</button>
+      </div>
+    </div>
+    <div class="img-edit-group">
+      <div class="img-edit-divider"></div>
+      <button class="img-edit-btn img-edit-import-btn" title="Upload new image into this section">Import</button>
+      <button class="img-edit-btn img-edit-add-btn" title="Add image from bank">Add</button>
+      <select class="img-edit-add-select"><option value="">Pick image…</option></select>
+    </div>
+    <div class="img-edit-img-controls">
+      <div class="img-edit-divider"></div>
+      <button class="img-edit-btn" data-action="move-left"  title="Move left">←</button>
+      <button class="img-edit-btn" data-action="move-right" title="Move right">→</button>
+      <button class="img-edit-btn img-edit-replace-btn" title="Replace selected image">Replace</button>
+      <select class="img-edit-replace-select"><option value="">Pick image…</option></select>
+      <button class="img-edit-btn img-edit-btn--remove" data-action="remove" title="Remove image">✕</button>
+    </div>`;
+
+  // Stop bar clicks from bubbling up to the wrap's deselect handler
+  bar.addEventListener('click', e => e.stopPropagation());
+
+  // Per-row layout buttons
+  bar.querySelectorAll('.img-edit-perrow-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sec = getSec(sectionId);
+      if (!sec) return;
+      sec.cols = parseInt(btn.dataset.cols);
+      reRenderSectionImages(container, sectionId);
+    });
+  });
+
+  // Import button: file picker → upload → add to section
+  bar.querySelector('.img-edit-import-btn').addEventListener('click', () => {
+    importImageToSection(container, sectionId);
+  });
+
+  // Add button: toggle the Add dropdown
+  bar.querySelector('.img-edit-add-btn').addEventListener('click', () => {
+    const addSel  = bar.querySelector('.img-edit-add-select');
+    const replSel = bar.querySelector('.img-edit-replace-select');
+    const opening = addSel.style.display !== 'inline-block';
+    replSel.style.display = 'none';
+    addSel.style.display  = opening ? 'inline-block' : 'none';
+    if (opening) addSel.focus();
+  });
+
+  // Add dropdown: append selected image to section
+  bar.querySelector('.img-edit-add-select').addEventListener('change', e => {
+    const src = e.target.value;
+    e.target.value = '';
+    e.target.style.display = 'none';
+    if (!src) return;
+    appendImgToSection(container, sectionId, src);
+  });
+
+  // Replace button: toggle the Replace dropdown
+  bar.querySelector('.img-edit-replace-btn').addEventListener('click', () => {
+    const addSel  = bar.querySelector('.img-edit-add-select');
+    const replSel = bar.querySelector('.img-edit-replace-select');
+    const opening = replSel.style.display !== 'inline-block';
+    addSel.style.display  = 'none';
+    replSel.style.display = opening ? 'inline-block' : 'none';
+    if (opening) replSel.focus();
+  });
+
+  // Replace dropdown: swap the selected image
+  bar.querySelector('.img-edit-replace-select').addEventListener('change', e => {
+    const newSrc = e.target.value;
+    e.target.value = '';
+    e.target.style.display = 'none';
+    if (!newSrc || !_imgSelectedEl) return;
+
+    const sec = getSec(sectionId);
+    if (!sec) return;
+    const wrap    = container.querySelector('.img-section-wrap');
+    const domImgs = wrap ? [...wrap.querySelectorAll('.project-section-images img')] : [];
+    sec.images = domImgs.map(img => ({
+      src: img === _imgSelectedEl ? newSrc : img.getAttribute('src'),
+      alt: img.alt || '',
+    }));
+    reRenderSectionImages(container, sectionId);
+    reSelectImg(container, newSrc);
+    refreshImgDropdowns();
+  });
+
+  // Move / remove actions
+  bar.addEventListener('click', e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'move-left')  doImgMove(container, sectionId, -1);
+    if (action === 'move-right') doImgMove(container, sectionId, +1);
+    if (action === 'remove')     doImgRemove(container, sectionId);
+  });
+
+  return bar;
+}
+
+// ── Activate / deactivate image section ───────────────────────────────────────
+function activateImgSection(wrap, sectionId) {
+  if (_imgActiveWrap && _imgActiveWrap !== wrap) deactivateImgSection();
+  _imgActiveWrap = wrap;
+  wrap.classList.add('is-active');
+
+  const sec = getSec(sectionId);
+  const currentCols = sec?.cols ?? 0;
+  wrap.querySelectorAll('.img-edit-perrow-btn').forEach(btn => {
+    btn.classList.toggle('is-active', parseInt(btn.dataset.cols) === currentCols);
+  });
+
+  // Close dropdowns on (re)activation
+  wrap.querySelector('.img-edit-add-select').style.display     = 'none';
+  wrap.querySelector('.img-edit-replace-select').style.display = 'none';
+
+  // Populate dropdowns with all uploaded images
+  const imgs = state.uploadedFiles.filter(f => f.fileType === 'image');
+  [wrap.querySelector('.img-edit-add-select'), wrap.querySelector('.img-edit-replace-select')].forEach(sel => {
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Pick image…</option>';
+    imgs.forEach(f => {
+      const src = f.permanentPath || f.previewSrc || '';
+      if (!src) return;
+      const opt = document.createElement('option');
+      opt.value = src;
+      opt.textContent = f.tag || f.originalName || f.filename || src.split('/').pop();
+      sel.appendChild(opt);
+    });
   });
 }
 
-function rebuildAddSectionButtons(doc) {
-  doc.querySelectorAll('.edit-add-section').forEach(el => el.remove());
-  const main = doc.querySelector('main');
-  if (!main) return;
-  const header = doc.querySelector('main > .container:not([data-section-id])');
-  const sectionContainers = [...doc.querySelectorAll('main > .container[data-section-id]')];
+function deactivateImgSection() {
+  if (!_imgActiveWrap) return;
+  _imgActiveWrap.classList.remove('is-active');
+  clearSelectedImg(_imgActiveWrap);
+  _imgActiveWrap = null;
+}
 
-  if (header) header.after(makeAddSectionBtn(doc, null));
-  sectionContainers.forEach(container => {
-    container.after(makeAddSectionBtn(doc, container.dataset.sectionId));
+function setSelectedImg(img, wrap) {
+  if (_imgSelectedEl) _imgSelectedEl.classList.remove('img-selected');
+  _imgSelectedEl = img;
+  img.classList.add('img-selected');
+  wrap.querySelector('.img-edit-img-controls')?.classList.add('is-visible');
+}
+
+function clearSelectedImg(wrap) {
+  if (_imgSelectedEl) _imgSelectedEl.classList.remove('img-selected');
+  _imgSelectedEl = null;
+  if (wrap) {
+    wrap.querySelector('.img-edit-img-controls')?.classList.remove('is-visible');
+    const replSel = wrap.querySelector('.img-edit-replace-select');
+    if (replSel) replSel.style.display = 'none';
+  }
+}
+
+// ── Re-render a section's images from state ───────────────────────────────────
+function reRenderSectionImages(container, sectionId) {
+  const sec  = getSec(sectionId);
+  const wrap = container.querySelector('.img-section-wrap');
+  if (!wrap || !sec) return;
+  renderImagesIntoWrap(wrap, sec.images || [], sec.cols ?? 0);
+  scheduleAutoSave();
+}
+
+function makeImgPlaceholder() {
+  const pl = document.createElement('div');
+  pl.className = 'img-add-placeholder';
+  pl.innerHTML = '<span class="img-placeholder-plus">+</span><span>Add a photo</span>';
+  return pl;
+}
+
+// ── Add a new section at the bottom ──────────────────────────────────────────
+function addSection() {
+  const newSec = { id: crypto.randomUUID(), heading: 'New Section', body: '', images: [], cols: 0 };
+  if (state.currentProject) {
+    state.currentProject.sections = [...(state.currentProject.sections || []), newSec];
+  }
+
+  const scope = $('studio-preview-content');
+  if (!scope) return;
+
+  const container = document.createElement('div');
+  container.className = 'container';
+  container.dataset.sectionId = newSec.id;
+
+  const section = document.createElement('section');
+  section.className = 'project-section';
+
+  const h = document.createElement('h2');
+  h.className = 'project-section__heading';
+  h.contentEditable = 'true';
+  h.dataset.placeholder = 'Section heading';
+  h.textContent = 'New Section';
+
+  const b = document.createElement('div');
+  b.className = 'project-section__body';
+  b.contentEditable = 'true';
+  b.dataset.placeholder = 'Section body';
+
+  section.appendChild(h);
+  section.appendChild(b);
+  container.appendChild(section);
+
+  const addBtn = scope.querySelector('.studio-add-section-btn');
+  scope.insertBefore(container, addBtn);
+
+  // Wire up image editing for the new section
+  makeImagesEditable(scope);
+  scheduleAutoSave();
+  container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── Re-select an image by src after re-render ─────────────────────────────────
+function reSelectImg(container, src) {
+  const wrap  = container.querySelector('.img-section-wrap');
+  if (!wrap) return;
+  const match = [...wrap.querySelectorAll('img')].find(i => i.getAttribute('src') === src);
+  if (match) setSelectedImg(match, wrap);
+}
+
+// ── Move selected image left or right ─────────────────────────────────────────
+function doImgMove(container, sectionId, delta) {
+  if (!_imgSelectedEl) return;
+  const wrap = container.querySelector('.img-section-wrap');
+  if (!wrap) return;
+  const sec = getSec(sectionId);
+  if (!sec) return;
+
+  const allImgs    = [...wrap.querySelectorAll('.project-section-images img')];
+  const idx        = allImgs.indexOf(_imgSelectedEl);
+  const newIdx     = idx + delta;
+  if (idx < 0 || newIdx < 0 || newIdx >= allImgs.length) return;
+
+  const selectedSrc = _imgSelectedEl.getAttribute('src');
+  const reordered   = [...allImgs];
+  [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+
+  const imgMap = new Map((sec.images || []).map(i => [i.src, i]));
+  sec.images = reordered.map(img => {
+    const s = img.getAttribute('src');
+    return imgMap.get(s) || { src: s, alt: img.alt || '' };
   });
+
+  reRenderSectionImages(container, sectionId);
+  reSelectImg(container, selectedSrc);
+  saveEdit();
 }
 
-function makeAddSectionBtn(doc, afterSectionId) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'edit-add-section';
-  const btn = doc.createElement('button');
-  btn.className = 'edit-add-section-btn';
-  btn.textContent = '+ Add section';
-  wrap.appendChild(btn);
-  btn.addEventListener('click', () => addSectionAfter(afterSectionId, doc));
-  return wrap;
+// ── Remove selected image from a section ─────────────────────────────────────
+function doImgRemove(container, sectionId) {
+  if (!_imgSelectedEl) return;
+  const sec = getSec(sectionId);
+  if (!sec) return;
+  const src = _imgSelectedEl.getAttribute('src');
+  sec.images = (sec.images || []).filter(i => i.src !== src);
+  _imgSelectedEl = null;
+  reRenderSectionImages(container, sectionId);
+  saveEdit();
 }
 
-function addSectionAfter(prevSectionId, doc) {
-  const newSec = { id: crypto.randomUUID(), heading: '', body: '', cols: 0, images: [] };
-  const sections = state.currentProject?.sections;
-  if (!sections) return;
-  if (prevSectionId) {
-    const idx = sections.findIndex(s => s.id === prevSectionId);
-    sections.splice(idx !== -1 ? idx + 1 : sections.length, 0, newSec);
-  } else {
-    sections.unshift(newSec);
-  }
-
-  const newContainer = doc.createElement('div');
-  newContainer.className = 'container edit-section-wrap';
-  newContainer.dataset.sectionId = newSec.id;
-
-  const bar = doc.createElement('div');
-  bar.className = 'edit-section-bar';
-  const dragHandle = doc.createElement('span');
-  dragHandle.className = 'edit-section-drag';
-  dragHandle.title = 'Drag to reorder';
-  dragHandle.textContent = '⠿';
-  dragHandle.draggable = true;
-  const deleteBtn = doc.createElement('button');
-  deleteBtn.className = 'edit-section-delete';
-  deleteBtn.title = 'Delete section';
-  deleteBtn.textContent = '✕';
-  deleteBtn.addEventListener('click', () => deleteSection(newSec.id, doc));
-  bar.appendChild(dragHandle);
-  bar.appendChild(deleteBtn);
-
-  const sectionEl = doc.createElement('section');
-  sectionEl.className = 'project-section';
-
-  const headingEl = doc.createElement('h2');
-  headingEl.className = 'project-section__heading';
-  headingEl.contentEditable = 'true';
-  headingEl.dataset.placeholder = 'Section heading';
-
-  const bodyEl = doc.createElement('div');
-  bodyEl.className = 'project-section__body';
-  bodyEl.contentEditable = 'true';
-  bodyEl.dataset.placeholder = 'Section body text';
-
-  const imgCon = doc.createElement('div');
-  imgCon.className = 'project-section-images';
-  addImageButton(doc, imgCon, newSec.id);
-  wireImgDropZone(imgCon, newSec.id, doc);
-
-  sectionEl.appendChild(headingEl);
-  sectionEl.appendChild(bodyEl);
-  sectionEl.appendChild(imgCon);
-  newContainer.appendChild(bar);
-  newContainer.appendChild(sectionEl);
-
-  if (prevSectionId) {
-    const prevContainer = doc.querySelector(`main > .container[data-section-id="${prevSectionId}"]`);
-    if (prevContainer) prevContainer.after(newContainer);
-    else doc.querySelector('main').appendChild(newContainer);
-  } else {
-    const header = doc.querySelector('main > .container:not([data-section-id])');
-    if (header) header.after(newContainer);
-    else doc.querySelector('main').prepend(newContainer);
-  }
-
-  rebuildAddSectionButtons(doc);
-  headingEl.focus();
-  scheduleSync(doc);
-}
-
-function deleteSection(sectionId, doc) {
-  const sections = state.currentProject?.sections;
-  if (!sections) return;
-  const idx = sections.findIndex(s => s.id === sectionId);
-  if (idx !== -1) sections.splice(idx, 1);
-  doc = doc || previewFrame.contentDocument;
-  const container = doc?.querySelector(`main > .container[data-section-id="${sectionId}"]`);
-  if (container) container.remove();
-  if (doc) rebuildAddSectionButtons(doc);
-  scheduleSync(doc);
-}
-
-function moveSectionInDOM(srcId, targetId, insertBefore, doc) {
-  const srcContainer    = doc.querySelector(`main > .container[data-section-id="${srcId}"]`);
-  const targetContainer = doc.querySelector(`main > .container[data-section-id="${targetId}"]`);
-  if (!srcContainer || !targetContainer) return;
-  const sections = state.currentProject?.sections || [];
-  const srcIdx = sections.findIndex(s => s.id === srcId);
-  const tgtIdx = sections.findIndex(s => s.id === targetId);
-  if (srcIdx !== -1 && tgtIdx !== -1) {
-    const [moved] = sections.splice(srcIdx, 1);
-    const newTgt = sections.findIndex(s => s.id === targetId);
-    sections.splice(insertBefore ? newTgt : newTgt + 1, 0, moved);
-  }
-  if (insertBefore) targetContainer.before(srcContainer);
-  else targetContainer.after(srcContainer);
-  rebuildAddSectionButtons(doc);
-  scheduleSync(doc);
-}
-
-// ── Edit mode: save/publish/discard ──────────────────────────────────────────
-async function saveDraftEdits() {
-  syncFromDOM();
-  setStatus(publishStatus, 'Saving draft…');
-  try {
-    await apiFetch(`/admin/projects/${encodeURIComponent(editSlug)}/save-draft-edits`, {});
-    setStatus(publishStatus, 'Draft saved.');
-    setTimeout(() => setStatus(publishStatus, ''), 2500);
-  } catch (err) {
-    setStatus(publishStatus, err.message, true);
-  }
-}
-
-async function publishEdits() {
-  syncFromDOM();
-  setStatus(publishStatus, 'Publishing…');
-  publishBtn.disabled = true;
-  draftBtn.disabled   = true;
-  try {
-    await apiFetch(`/admin/projects/${encodeURIComponent(editSlug)}/publish-edits`, {});
-    clearStorage();
-    setStatus(publishStatus, 'Published! Redirecting…');
-    setTimeout(() => { window.location.href = '/admin/dashboard?msg=Published!'; }, 900);
-  } catch (err) {
-    setStatus(publishStatus, err.message, true);
-    publishBtn.disabled = false;
-    draftBtn.disabled   = false;
-  }
-}
-
-async function discardDraftEdits() {
-  if (!confirm('Discard draft? The published project will be restored.')) return;
-  try {
-    await apiFetch(`/admin/projects/${encodeURIComponent(editSlug)}/discard-draft`, {});
-    clearStorage();
-    window.location.href = '/admin/dashboard';
-  } catch (err) {
-    setStatus(publishStatus, err.message, true);
-  }
-}
-
-// ── Restore on load ───────────────────────────────────────────────────────────
-// Skip localStorage restore in edit mode — project data comes from the DB via server session
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
 if (studioMode !== 'edit') tryRestoreFromStorage();
 
 if (studioMode === 'edit' && initialProject) {
@@ -1333,41 +1613,13 @@ if (studioMode === 'edit' && initialProject) {
     initEditMode(initialProject);
   } catch (e) {
     console.error('initEditMode failed:', e);
-    const scope = document.getElementById('studio-preview-content');
+    const scope = $('studio-preview-content');
     if (scope) {
       const errEl = document.createElement('div');
       errEl.style.cssText = 'background:#fdd;color:#900;padding:12px;font:12px monospace;white-space:pre-wrap;border-bottom:1px solid #f88;';
-      errEl.textContent = 'Edit mode init error:\n' + e.message + '\n' + (e.stack || '');
+      errEl.textContent = 'Edit mode init error:\n' + e.message;
       scope.insertBefore(errEl, scope.firstChild);
-      // Fallback: still make text editable even if full init failed
       activateEditing(scope);
     }
-  }
-}
-
-function activateEditing(scope) {
-  if (!scope) return;
-  if (!scope.querySelector('.studio-edit-hint')) {
-    const hint = document.createElement('div');
-    hint.className = 'studio-edit-hint';
-    hint.textContent = 'Click any text to edit';
-    scope.insertBefore(hint, scope.firstChild);
-  }
-  [
-    ['.project-title', 'Project title'],
-    ['.project-subtitle', 'Project subtitle'],
-  ].forEach(([sel, ph]) => {
-    const el = scope.querySelector(sel);
-    if (el) { el.contentEditable = 'true'; el.dataset.placeholder = ph; }
-  });
-  scope.querySelectorAll('.project-section').forEach(sec => {
-    const h = sec.querySelector('.project-section__heading');
-    const b = sec.querySelector('.project-section__body');
-    if (h) { h.contentEditable = 'true'; h.dataset.placeholder = 'Section heading'; }
-    if (b) { b.contentEditable = 'true'; b.dataset.placeholder = 'Section body'; }
-  });
-  if (!scope.dataset.editListening) {
-    scope.dataset.editListening = '1';
-    scope.addEventListener('input', scheduleSync);
   }
 }

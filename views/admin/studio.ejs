@@ -10,6 +10,9 @@
   <% if (typeof initialProjectJson !== 'undefined') { %>
   <script type="application/json" id="studio-initial-data"><%- initialProjectJson %></script>
   <% } %>
+  <% if (typeof folderImagesJson !== 'undefined') { %>
+  <script type="application/json" id="studio-folder-images"><%- folderImagesJson %></script>
+  <% } %>
   <title><%= typeof mode !== 'undefined' && mode === 'edit' ? 'Edit Project — Admin' : 'Generate New Project — Admin' %></title>
   <style>
     html, body { overflow: hidden; height: 100%; }
@@ -29,9 +32,8 @@
       <% if (typeof mode !== 'undefined' && mode === 'edit') { %>
       <div class="admin-nav-actions studio-nav-actions">
         <span id="studio-publish-status" class="studio-nav-status"></span>
-        <button id="studio-discard-btn" class="btn btn-sm btn-ghost">Exit</button>
-        <button id="studio-draft-btn" class="btn btn-sm btn-secondary">Save Draft</button>
-        <button id="studio-publish-btn" class="btn btn-sm btn-primary">Publish →</button>
+        <a href="/admin/dashboard" class="btn btn-sm btn-ghost">← Dashboard</a>
+        <a href="/projects/<%= editSlug %>" class="btn btn-sm btn-ghost" target="_blank" rel="noopener">View Live ↗</a>
       </div>
       <% } else { %>
       <div class="admin-nav-actions">
@@ -43,7 +45,7 @@
     </div>
   </nav>
 
-  <div class="studio-wrap<%= typeof mode !== 'undefined' && mode === 'edit' ? ' is-generated sidebar-collapsed' : '' %>" id="studio-wrap">
+  <div class="studio-wrap<%= typeof mode !== 'undefined' && mode === 'edit' ? ' is-generated' : '' %>" id="studio-wrap">
 
     <% if (typeof mode === 'undefined' || mode !== 'edit') { %>
     <!-- ══ PRE-GEN: scrollable admin-style form ════════════════════════ -->
@@ -101,7 +103,7 @@
       <div class="studio-section is-closed" id="section-files">
         <div class="studio-section-header" data-section="files" role="button" tabindex="0">
           <div class="studio-section-header-label">
-            <span class="studio-label">Files</span>
+            <span class="studio-label">Images</span>
             <span class="studio-label-note" id="studio-file-count-note"></span>
           </div>
           <span class="studio-section-chevron">▾</span>
@@ -123,7 +125,9 @@
         </div>
         <div class="studio-section-body" id="section-chat-body">
           <div class="studio-chat-history" id="studio-chat-history" aria-live="polite"></div>
+          <div id="studio-chat-attachments" class="studio-chat-attachments" style="display:none;"></div>
           <div class="studio-chat-input-row">
+            <button id="studio-chat-attach-btn" class="studio-chat-attach-btn" title="Attach file" aria-label="Attach file">+</button>
             <textarea id="studio-chat-input" class="studio-chat-input" placeholder="Ask Claude to change something…" rows="2"></textarea>
             <button id="studio-chat-send" class="studio-chat-send-btn" aria-label="Send">↑</button>
           </div>
@@ -166,10 +170,6 @@
 
     </div><!-- /studio-sidebar -->
 
-    <!-- ══ SIDEBAR TOGGLE TAB ════════════════════════════════════════ -->
-    <% if (typeof mode !== 'undefined' && mode === 'edit') { %>
-    <button id="studio-sidebar-toggle" class="studio-sidebar-toggle" aria-label="Toggle sidebar"></button>
-    <% } %>
 
     <!-- ══ PREVIEW ════════════════════════════════════════════════════ -->
     <div class="studio-preview" id="studio-preview">

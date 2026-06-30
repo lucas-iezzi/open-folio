@@ -48,6 +48,14 @@ This is a single-file Express server (`server.js`) with EJS templates and a SQLi
 - `POST /admin/upload/:slug` — image upload (multer, stored in `public/images/projects/<slug>/`)
 - `POST /admin/image/delete` — deletes an image file from disk
 - `/api/v1/*` — REST API protected by bearer token (see below)
+- `GET /admin/studio` — AI Studio (generate mode)
+- `GET /admin/studio/edit/:slug` — AI Studio (edit mode for an existing project)
+- `POST /admin/studio/upload` — stages images/files in `public/images/studio-temp/<tempId>/`
+- `POST /admin/studio/generate` — sends text + images (base64) to Claude, returns project JSON
+- `POST /admin/studio/refine` — chat: sends feedback + full current project state to Claude, returns updated JSON
+- `POST /admin/studio/publish` — (generate mode) saves project to DB, moves images to permanent folder
+- `POST /admin/projects/:slug/publish-edits` — (edit mode) auto-saves project to DB; keeps studio session alive so chat context survives
+- `POST /admin/studio/discard` — deletes temp folder, clears studio session
 
 **Security model:** CSRF tokens are stored in the session and checked on every mutating admin route. The token is passed to templates as `csrfToken` and sent from `admin.js` via the `X-CSRF-Token` header (for JSON requests) or `_csrf` body field (for form POSTs). Session is regenerated on login to prevent session fixation. Slugs and image paths are validated with `sanitizeSlug()` and `validateImagePath()` before any disk access to prevent path traversal.
 
@@ -61,6 +69,7 @@ This is a single-file Express server (`server.js`) with EJS templates and a SQLi
 - `SESSION_SECRET` — express-session secret
 - `ADMIN_PASSWORD_HASH` — bcrypt hash of the admin password
 - `API_KEY` — bearer token for the REST API
+- `ANTHROPIC_API_KEY` — required for AI Studio (generate + edit modes)
 - `PORT` — defaults to 3000
 - `NODE_ENV` — set to `production` to enable secure cookies and HSTS
 
@@ -144,26 +153,47 @@ scp user@SERVER:~/portfolio/data/portfolio.db ./backup-$(date +%Y%m%d).db
 
 The admin panel's **Export JSON** button also gives a portable snapshot of all project text/metadata at any time.
 
-## Planned: AI Studio (not yet built)
+## AI Studio
 
-A new **AI Studio** tab in the admin panel for LLM-assisted project creation. Build and test locally first, tag a stable release before deploying.
+The **AI Studio** tab in the admin panel provides LLM-assisted project creation and editing. Access via the "✦ Studio" button on the dashboard.
 
-**Flow:** User dumps raw notes + uploads images/files → hits Generate → Claude reads everything and produces a structured project page draft → live preview renders using the real `project.ejs` template → user types feedback to refine live → hits Publish to save to DB and move images into place.
+### Two modes
 
-**New routes to add:**
-- `GET /admin/studio` — studio page
-- `POST /admin/studio/upload` — stages images/files in `public/images/studio-temp/`
-- `POST /admin/studio/generate` — sends text + images (base64) to Claude, returns project JSON
-- `POST /admin/studio/refine` — takes feedback + existing JSON, returns updated JSON
-- `POST /admin/studio/publish` — saves project to DB, moves images to `public/images/projects/<slug>/`
+**Generate mode** (`/admin/studio`): Creates a new project from scratch.
+- User writes a description and uploads images/files (PDFs are text-extracted server-side)
+- Hits Generate → Claude produces a full project JSON with title, subtitle, sections, and image placement
+- Live preview renders in an iframe using the real `project.ejs` template
+- Chat panel lets the user refine the draft iteratively; Claude has full conversation history
+- Publish saves to DB and moves images from the temp folder (`public/images/studio-temp/<tempId>/`) to the permanent project folder
 
-**LLM:** Claude API via `@anthropic-ai/sdk`. Add `ANTHROPIC_API_KEY` to `.env`. Send images as base64 so Claude can see them and decide placement. Keep conversation history in the session for iterative refinement. Model is configurable — sonnet for speed, opus for quality.
+**Edit mode** (`/admin/studio/edit/:slug`): Edits an existing project in place.
+- Project page renders directly (no iframe) with `contenteditable` fields and inline image editing
+- Sidebar is always visible and defaults to the Metadata tab
+- Auto-save writes to DB on every edit (debounced); studio session is preserved so chat context survives saves
+- Chat always sends the full current page state (title, subtitle, all sections + image filenames/labels) before every message — the LLM always has up-to-date context
+- When Claude suggests changes, they appear as a preview (orange banner, editing frozen); user clicks Accept or Discard. Typing "yes", "lgtm", etc. also accepts.
 
-**UI layout:** Split-pane. Left: brain dump textarea + image drop zone + file uploads + feedback input. Right: live preview using `project.ejs`. Bottom: Publish / Discard buttons.
+### Image handling
 
-**File handling:** Temp uploads land in `public/images/studio-temp/`. On Publish, images move to the permanent project folder. On Discard, temp folder is deleted. PDFs: extract text server-side and send as context to Claude (not displayed on the page) — needs `pdf-parse` package.
+- Image labels (alt text) are stored in `img.alt` on sections and `thumbnailAlt` on the project — persisted to DB
+- On the live site, `img[title]` renders the label as a hover tooltip (set in `project-body.ejs`)
+- In edit mode, sidebar shows all project images; labels can be set per-image with a tag input
+- The thumbnail picker (`#studio-thumbnail-select`) is populated from uploaded images with labels shown
 
-**Build order:** (1) env var + SDK install, (2) temp upload route, (3) generate route (text first, then vision), (4) studio UI input panel, (5) preview rendering, (6) refine/feedback loop, (7) publish + cleanup.
+### LLM integration
+
+- Claude API via `@anthropic-ai/sdk`. `ANTHROPIC_API_KEY` in `.env`.
+- Chat history stored in `req.session.studio.history` (alternating user/assistant turns).
+- In edit mode the first user message contains the full current page state so the model has context on session start. Each subsequent message re-injects the latest page state.
+- Images are sent to the model as filename + label (not base64) in edit mode. Chat-attached files (images, PDFs, text) are forwarded as base64 in the next message only and never saved server-side.
+- Model is selectable per-session: Sonnet 4.6 (fast) or Opus 4.8 (quality).
+
+### Key files
+
+- `public/js/studio.js` — all studio frontend logic (~1650 lines)
+- `views/admin/studio.ejs` — studio page template (both modes share one template, mode toggled via EJS)
+- `views/partials/project-body.ejs` — shared partial used by both the public project page and edit-mode preview
+- `public/css/admin.css` — includes studio-specific styles (`.studio-*` classes)
 
 ## Scripts
 

@@ -1427,6 +1427,57 @@ textarea {
 .studio-chat-send-btn:hover:not(:disabled) { opacity: 0.75; }
 .studio-chat-send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
+.studio-chat-attach-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.studio-chat-attach-btn:hover { background: var(--surface-raised); color: var(--text); }
+
+.studio-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0 2px;
+}
+.studio-chat-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #e8f0fe;
+  color: #2a52a0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-chat-attach-chip button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.studio-chat-attach-chip button:hover { opacity: 1; }
+
 /* Typing indicator */
 .is-thinking-bubble {
   display: flex !important;
@@ -1580,6 +1631,57 @@ textarea {
   padding: 7px 7%;
   text-align: center;
   pointer-events: none;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+/* AI preview mode — orange banner */
+.studio-edit-hint.is-ai-preview {
+  background: #fff3e0;
+  border-bottom-color: #ffb74d;
+  color: #bf360c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: auto;
+}
+.studio-ai-accept-btn,
+.studio-ai-discard-btn {
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.studio-ai-accept-btn {
+  background: none;
+  border: 1px solid #66bb6a;
+  color: #1b5e20;
+}
+.studio-ai-accept-btn:hover { background: #c8e6c9; }
+.studio-ai-discard-btn {
+  background: none;
+  border: 1px solid #ffb74d;
+  color: #bf360c;
+}
+.studio-ai-discard-btn:hover { background: #ffe0b2; }
+
+/* Freeze all interactions in the preview while AI changes are pending */
+.studio-preview-content.is-ai-preview [contenteditable] {
+  cursor: default !important;
+}
+.studio-preview-content.is-ai-preview [contenteditable]:hover {
+  outline: none !important;
+}
+.studio-preview-content.is-ai-preview [contenteditable]:focus {
+  outline: none !important;
+}
+.studio-preview-content.is-ai-preview .img-edit-bar,
+.studio-preview-content.is-ai-preview .img-add-placeholder,
+.studio-preview-content.is-ai-preview .studio-add-section-btn {
+  pointer-events: none;
+  opacity: 0.4;
 }
 
 /* Contenteditable elements in the preview */
@@ -1943,22 +2045,6 @@ textarea {
 
 
 
-/* Collapsed sidebar: preview takes full width */
-.studio-wrap.is-generated.sidebar-collapsed {
-  grid-template-columns: 0 1fr;
-}
-.studio-wrap.is-generated.sidebar-collapsed .studio-sidebar {
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
-  border-right: none;
-}
-
-/* Edit mode — iframe interactive when sidebar is collapsed */
-.studio-wrap.is-generated.sidebar-collapsed .studio-preview-frame {
-  pointer-events: all;
-}
-
 /* ── Studio edit mode: nav action buttons (upper right) ─────────────────────── */
 .studio-nav-actions {
   gap: 8px;
@@ -1974,53 +2060,6 @@ textarea {
   color: var(--error, #c0392b);
 }
 
-/* ── Sidebar toggle tab ──────────────────────────────────────────────────────── */
-.studio-sidebar-toggle {
-  position: fixed;
-  left: 320px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 40;
-  width: 16px;
-  height: 64px;
-  /* Same light-blue as the edit hint bar */
-  background: #f0f4ff;
-  border: 1px solid #c8d9ff;
-  border-left: none;
-  border-radius: 0 8px 8px 0;
-  box-shadow: 3px 0 10px rgba(66,133,244,0.12);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: left 0.22s cubic-bezier(0.4,0,0.2,1), background 0.12s;
-}
-
-/* Chevron — border-right + border-top form a corner; rotation sets direction */
-.studio-sidebar-toggle::after {
-  content: '';
-  display: block;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid #3a5cc5;
-  border-top: 1.5px solid #3a5cc5;
-  transform: rotate(225deg); /* corner points left → close */
-  transition: transform 0.18s ease;
-}
-
-/* Collapsed: same shape (tab always protrudes right), only arrow flips */
-.studio-wrap.sidebar-collapsed .studio-sidebar-toggle {
-  left: 0;
-}
-
-.studio-wrap.sidebar-collapsed .studio-sidebar-toggle::after {
-  transform: rotate(45deg); /* corner points right → open */
-}
-
-.studio-sidebar-toggle:hover {
-  background: #e4ecff;
-}
 
 /* ── Thumbnail picker (Metadata section) ─────────────────────────────────────── */
 .studio-thumbnail-preview {
@@ -2054,4 +2093,219 @@ textarea {
 }
 .studio-edit-badge.has-draft {
   background: #fff3cd; border-color: #ffc107; color: #856404;
+}
+
+/* ── Image section editing ───────────────────────────────────────────────────── */
+.studio-preview-content .img-section-wrap {
+  cursor: pointer;
+  outline: 2px dashed transparent;
+  outline-offset: 4px;
+  border-radius: 3px;
+  transition: outline-color 0.12s;
+}
+.studio-preview-content .img-section-wrap:hover {
+  outline-color: rgba(66,133,244,0.45);
+}
+.studio-preview-content .img-section-wrap.is-active {
+  outline: 2px solid #4285f4;
+  cursor: default;
+}
+.studio-preview-content .img-section-wrap.is-active img {
+  cursor: pointer;
+}
+.studio-preview-content img.img-selected {
+  outline: 3px solid #4285f4;
+  outline-offset: -2px;
+  opacity: 0.88;
+}
+
+/* ── Image edit bar ──────────────────────────────────────────────────────────── */
+.img-edit-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: #f0f4ff;
+  border: 1.5px solid #4285f4;
+  border-top: 1px solid #c8d9ff;
+  border-radius: 0 0 6px 6px;
+  padding: 6px 10px;
+  margin-top: 2px;
+  font-size: 12px;
+  font-family: inherit;
+  user-select: none;
+  flex-wrap: wrap;
+}
+.img-section-wrap.is-active .img-edit-bar {
+  display: flex;
+}
+
+.img-edit-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Per-row selector buttons */
+.img-edit-perrow-btns {
+  display: flex;
+  gap: 3px;
+}
+.img-edit-perrow-btn {
+  width: 28px;
+  height: 24px;
+  border: 1px solid #c8d9ff;
+  border-radius: 4px;
+  background: #fff;
+  color: #3a5cc5;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.img-edit-perrow-btn:hover {
+  background: #e4ecff;
+  border-color: #4285f4;
+}
+.img-edit-perrow-btn.is-active {
+  background: #4285f4;
+  border-color: #4285f4;
+  color: #fff;
+}
+
+/* Image action controls (visible only when an image is selected) */
+.img-edit-img-controls {
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+.img-edit-img-controls.is-visible {
+  display: flex;
+}
+
+.img-edit-divider {
+  width: 1px;
+  height: 20px;
+  background: #c8d9ff;
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.img-edit-btn {
+  height: 24px;
+  min-width: 28px;
+  padding: 0 7px;
+  border: 1px solid #c8d9ff;
+  border-radius: 4px;
+  background: #fff;
+  color: #3a5cc5;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+.img-edit-btn:hover {
+  background: #e4ecff;
+  border-color: #4285f4;
+}
+.img-edit-btn--remove {
+  color: #c0392b;
+  border-color: #f5c6cb;
+}
+.img-edit-btn--remove:hover {
+  background: #fdf0ee;
+  border-color: #c0392b;
+}
+.img-edit-import-btn {
+  background: #4285f4;
+  color: #fff;
+  border-color: #3a76d8;
+}
+.img-edit-import-btn:hover {
+  background: #3a76d8;
+  border-color: #2c60c8;
+}
+
+.img-edit-replace-select,
+.img-edit-add-select {
+  display: none;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #c8d9ff;
+  border-radius: 4px;
+  background: #fff;
+  color: #3a5cc5;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 140px;
+}
+.img-edit-replace-select:focus,
+.img-edit-add-select:focus {
+  outline: none;
+  border-color: #4285f4;
+}
+
+/* ── Add Section button ──────────────────────────────────────────────────────── */
+.studio-add-section-btn {
+  display: block;
+  width: 86%;
+  margin: 24px 7% 56px;
+  padding: 14px 20px;
+  background: transparent;
+  border: 2px dashed rgba(66,133,244,0.3);
+  border-radius: 6px;
+  color: rgba(66,133,244,0.7);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.studio-add-section-btn:hover {
+  background: #f0f4ff;
+  border-color: #4285f4;
+  color: #3a5cc5;
+}
+
+/* ── Image add placeholder (empty-section photo hint) ───────────────────────── */
+.img-add-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 20px 24px;
+  border: 2px dashed rgba(66,133,244,0.28);
+  border-radius: 4px;
+  color: rgba(66,133,244,0.6);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  min-height: 72px;
+  pointer-events: none; /* wrap handles the click */
+}
+.img-section-wrap.is-active .img-add-placeholder {
+  border-color: #4285f4;
+  background: #f8f9ff;
+  color: #3a5cc5;
+}
+.img-placeholder-plus {
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+  color: rgba(66,133,244,0.5);
+}
+.img-section-wrap.is-active .img-placeholder-plus {
+  color: #4285f4;
 }

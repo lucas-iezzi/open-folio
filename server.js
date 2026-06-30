@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 const multer    = require('multer');
 const crypto    = require('crypto');
 const Database  = require('better-sqlite3');
+const SqliteStore = require('better-sqlite3-session-store')(session);
 
 // ── Startup validation ────────────────────────────────────────────────────────
 if (!process.env.SESSION_SECRET || !process.env.ADMIN_PASSWORD_HASH) {
@@ -152,6 +153,7 @@ app.use(express.json({ limit: '2mb' }));
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 app.use(session({
+  store: new SqliteStore({ client: db, expired: { clear: true, intervalMs: 900000 } }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -772,11 +774,8 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
   const project = loadProjects().find(p => p.slug === slug);
   if (!project) return res.status(404).render('404');
 
-  let editProject = project;
-  let hasDraft = false;
-  if (project.draft_data) {
-    try { editProject = { ...project, ...JSON.parse(project.draft_data) }; hasDraft = true; } catch {}
-  }
+  const editProject = project;
+  const hasDraft = false;
 
   const tempId = crypto.randomUUID();
   fs.mkdirSync(path.join(STUDIO_TEMP_BASE, tempId), { recursive: true });
@@ -790,7 +789,18 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
     currentProject: editProject,
   };
 
+  // Scan the project image folder so the sidebar shows ALL uploaded images
+  const imgDir = path.join(__dirname, 'public', 'images', 'projects', slug);
+  let folderImages = [];
+  try {
+    folderImages = fs.readdirSync(imgDir)
+      .filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+      .map(f => `/images/projects/${slug}/${f}`);
+  } catch { /* folder not created yet */ }
+
   const safeJson = JSON.stringify(editProject)
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+  const safeFolderImages = JSON.stringify(folderImages)
     .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 
   res.render('admin/studio', {
@@ -801,6 +811,7 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
     hasDraft,
     previewProject:     editProject,
     initialProjectJson: safeJson,
+    folderImagesJson:   safeFolderImages,
   });
 });
 
@@ -810,16 +821,22 @@ app.post('/admin/projects/:slug/save-draft-edits', requireAuth, requireCsrf, (re
     return res.status(404).json({ error: 'Not found.' });
   }
   const studio = req.session.studio;
-  if (!studio?.currentProject) return res.status(400).json({ error: 'No project in session.' });
+  // Accept project from request body (client always sends it); fall back to session
+  const proj = (req.body?.project && typeof req.body.project === 'object')
+    ? req.body.project
+    : studio?.currentProject;
+  if (!proj) return res.status(400).json({ error: 'No project data.' });
 
-  const proj = studio.currentProject;
+  // Keep session in sync so publish works in the same session
+  if (studio) studio.currentProject = proj;
+
   const draftData = JSON.stringify({
     title:        (proj.title        || '').slice(0, 200),
     subtitle:     (proj.subtitle     || '').slice(0, 300),
     pageTitle:    (proj.pageTitle    || '').slice(0, 200),
     thumbnail:    proj.thumbnail     || '',
     thumbnailAlt: (proj.thumbnailAlt || '').slice(0, 200),
-    sections:     sanitizeSections(proj.sections),
+    sections:     sanitizeSections(proj.sections, { allowTemp: true }),
   });
   db.prepare('UPDATE projects SET draft_data = ? WHERE slug = ?').run(draftData, slug);
   res.json({ ok: true });
@@ -832,9 +849,22 @@ app.post('/admin/projects/:slug/publish-edits', requireAuth, requireCsrf, (req, 
   if (idx === -1) return res.status(404).json({ error: 'Not found.' });
 
   const studio = req.session.studio;
-  if (!studio?.currentProject) return res.status(400).json({ error: 'No project in session.' });
+  const proj = (req.body?.project && typeof req.body.project === 'object')
+    ? req.body.project
+    : studio?.currentProject;
+  if (!proj) return res.status(400).json({ error: 'No project data.' });
 
-  const proj = studio.currentProject;
+  // If client sent no sections, fall back to session project sections so we never wipe content
+  if (!Array.isArray(proj.sections) || proj.sections.length === 0) {
+    const sessionSections = studio?.currentProject?.sections;
+    if (Array.isArray(sessionSections) && sessionSections.length > 0) {
+      console.warn('[publish-edits] client sent 0 sections — using session sections as fallback');
+      proj.sections = sessionSections;
+    }
+  }
+
+  const sanitized = sanitizeSections(proj.sections);
+
   projects[idx] = {
     ...projects[idx],
     title:        (proj.title        || '').slice(0, 200),
@@ -842,13 +872,22 @@ app.post('/admin/projects/:slug/publish-edits', requireAuth, requireCsrf, (req, 
     pageTitle:    (proj.pageTitle    || '').slice(0, 200),
     thumbnail:    validateImagePath(proj.thumbnail) || projects[idx].thumbnail,
     thumbnailAlt: (proj.thumbnailAlt || '').slice(0, 200),
-    sections:     sanitizeSections(proj.sections),
+    sections:     sanitized,
     draft_data:   null,
   };
   saveProjects(projects);
   db.prepare('UPDATE projects SET draft_data = NULL WHERE slug = ?').run(slug);
-  if (studio.tempId) discardStudioTemp(studio.tempId);
-  delete req.session.studio;
+
+  if (studio?.editSlug) {
+    // Edit mode: keep the session alive so chat history and context survive auto-saves.
+    // Just update currentProject to reflect what was saved.
+    studio.currentProject = projects[idx];
+  } else {
+    // Generate mode: fully tear down the temp session after publish.
+    if (studio?.tempId) discardStudioTemp(studio.tempId);
+    delete req.session.studio;
+  }
+
   res.json({ ok: true });
 });
 
@@ -1259,7 +1298,7 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
   const studio = req.session.studio;
   if (!studio?.currentProject) return res.status(400).json({ error: 'Generate a project first.' });
 
-  const { feedback, provider = 'anthropic', model = 'claude-sonnet-4-6', tags = {}, editorImages, currentProject, hadManualEdits } = req.body;
+  const { feedback, provider = 'anthropic', model = 'claude-sonnet-4-6', tags = {}, editorImages, imageManifest, currentProject, chatAttachments } = req.body;
   if (!feedback || feedback.trim().length < 3) {
     return res.status(400).json({ error: 'Please enter a message.' });
   }
@@ -1269,28 +1308,65 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
   }
 
   try {
-    const editorFiles = Array.isArray(editorImages)
-      ? editorImages.filter(f => f.filename && f.permanentPath).map(f => ({
-          ...f,
-          permanentPath: path.join(__dirname, 'public', f.permanentPath.replace(/^\//, '')),
-          fileType: 'image',
-          mimeType: 'image/jpeg',
-        }))
-      : [];
-    const effectiveFiles = [...studio.uploadedFiles, ...editorFiles];
+    const messages = [];
 
-    // Reconstruct full message chain: first message has images + description, then conversation history
-    const firstMsg = await buildFirstMessage(studio.description, effectiveFiles, studio.tempId, tags);
-    const messages = [firstMsg];
+    if (studio.editSlug && studio.currentProject) {
+      // Edit mode: merge intro + full page state into the first user message so there
+      // are never two consecutive user messages regardless of history length.
+      const proj   = studio.currentProject;
+      const imgMap = Object.fromEntries((imageManifest || []).map(i => [i.src, i.label]).filter(([k]) => k));
+      let ctx  = `You are helping edit an existing portfolio project (slug: "${studio.editSlug}").\n`;
+      ctx += `When regenerating, use the EXACT full src paths shown below for images — never bare filenames.\n\n`;
+      ctx += `[Current page state — updated as of this message]\n`;
+      ctx += `Title (homepage card): ${proj.title || ''}\n`;
+      ctx += `Page title (H1): ${proj.pageTitle || ''}\n`;
+      ctx += `Subtitle: ${proj.subtitle || ''}\n`;
+      ctx += `Thumbnail: ${proj.thumbnail || '(none)'}\n\n`;
+      for (const sec of (proj.sections || [])) {
+        ctx += `Section: "${sec.heading || '(untitled)'}"\n`;
+        if (sec.body) ctx += `  Body: ${sec.body}\n`;
+        for (const img of (sec.images || [])) {
+          const lbl = imgMap[img.src] || img.alt || '';
+          ctx += `  Image: ${img.src}${lbl ? ` — "${lbl}"` : ''}\n`;
+        }
+      }
+      if (imageManifest?.length) {
+        ctx += `\nAll images available in this project's folder:\n`;
+        ctx += imageManifest.map(i => `  ${i.src}${i.label ? ` — "${i.label}"` : ''}`).join('\n');
+      }
+      messages.push({ role: 'user',      content: ctx.trim() });
+      messages.push({ role: 'assistant', content: 'Understood — I have the full current page state and am ready to help.' });
+    } else {
+      // Generate mode: send files/images as the first message
+      const editorFiles = Array.isArray(editorImages)
+        ? editorImages.filter(f => f.filename && f.permanentPath).map(f => ({
+            ...f,
+            permanentPath: path.join(__dirname, 'public', f.permanentPath.replace(/^\//, '')),
+            fileType: 'image',
+            mimeType: 'image/jpeg',
+          }))
+        : [];
+      const effectiveFiles = [...studio.uploadedFiles, ...editorFiles];
+      messages.push(await buildFirstMessage(studio.description, effectiveFiles, studio.tempId, tags));
+    }
 
+    // Replay conversation history
     for (const h of studio.history) {
       messages.push({ role: h.role, content: h.content });
     }
-    if (hadManualEdits && studio.currentProject) {
-      messages.push({ role: 'user', content: 'I made some manual edits. Here is the current project state: ' + JSON.stringify(studio.currentProject) });
-      messages.push({ role: 'assistant', content: 'Understood, I can see the current project state.' });
+
+    // Build the final user turn — may include client-side file attachments (never saved server-side)
+    const userBlocks = [];
+    for (const att of (chatAttachments || [])) {
+      if (att.type === 'image' && att.data && att.mediaType) {
+        userBlocks.push({ type: 'text', text: `Attached image: ${att.name}` });
+        userBlocks.push({ type: 'image', source: { type: 'base64', media_type: att.mediaType, data: att.data } });
+      } else if (att.type === 'text' && att.data) {
+        userBlocks.push({ type: 'text', text: `--- Attached file: ${att.name} ---\n${String(att.data).slice(0, 50000)}\n---` });
+      }
     }
-    messages.push({ role: 'user', content: feedback.trim() });
+    userBlocks.push({ type: 'text', text: feedback.trim() });
+    messages.push({ role: 'user', content: userBlocks.length === 1 ? userBlocks[0].text : userBlocks });
 
     const rawText = await callLLM({ provider, model, messages, systemPrompt: STUDIO_REFINE_PROMPT });
     const parsed  = extractJSON(rawText);
@@ -1304,18 +1380,39 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
     studio.chatHistory.push({ role: 'assistant', text: message });
 
     if (regenerate && projectData && typeof projectData === 'object') {
-      const tempId = studio.tempId;
-      if (projectData.thumbnail) {
-        projectData.thumbnail = `/images/studio-temp/${tempId}/${projectData.thumbnail}`;
+      if (studio.editSlug) {
+        // Edit mode: resolve any bare filenames to full paths using the image manifest;
+        // never prepend studio-temp (images are already in the permanent project folder).
+        const byFilename = {};
+        for (const img of (imageManifest || [])) {
+          if (img.filename && img.src) byFilename[img.filename] = img.src;
+        }
+        const resolveImgSrc = src => {
+          if (!src) return '';
+          if (src.startsWith('/')) return src;      // already a full path
+          return byFilename[src] || src;             // filename → full path via manifest
+        };
+        if (projectData.thumbnail) projectData.thumbnail = resolveImgSrc(projectData.thumbnail);
+        projectData.sections = (projectData.sections || []).map(s => ({
+          ...s,
+          id: s.id || crypto.randomUUID(),
+          images: (s.images || []).map(img => ({ ...img, src: resolveImgSrc(img.src) })),
+        }));
+      } else {
+        // Generate mode: prefix bare filenames with the studio-temp path
+        const tempId = studio.tempId;
+        if (projectData.thumbnail) {
+          projectData.thumbnail = `/images/studio-temp/${tempId}/${projectData.thumbnail}`;
+        }
+        projectData.sections = (projectData.sections || []).map(s => ({
+          ...s,
+          id: s.id || crypto.randomUUID(),
+          images: (s.images || []).map(img => ({
+            ...img,
+            src: img.src ? `/images/studio-temp/${tempId}/${img.src}` : '',
+          })),
+        }));
       }
-      projectData.sections = (projectData.sections || []).map(s => ({
-        ...s,
-        id: s.id || crypto.randomUUID(),
-        images: (s.images || []).map(img => ({
-          ...img,
-          src: img.src ? `/images/studio-temp/${tempId}/${img.src}` : '',
-        })),
-      }));
       studio.currentProject = projectData;
       return res.json({ ok: true, message, regenerate: true, project: projectData });
     }
@@ -1601,12 +1698,23 @@ function validateImagePath(p) {
   return '';
 }
 
+// Like validateImagePath but also accepts studio-temp paths (used for drafts so
+// in-progress images are not stripped before they've been moved to permanent storage).
+function validateImagePathPermissive(p) {
+  if (!p || typeof p !== 'string') return '';
+  const clean = p.trim();
+  if (validateImagePath(clean)) return clean;
+  if (/^\/images\/studio-temp\/[a-f0-9-]{36}\/[a-z0-9_.()+-]+\.(jpg|jpeg|png|gif|webp)$/i.test(clean)) return clean;
+  return '';
+}
+
 // TODO: add YouTube embed support to sections. Each section's media slot currently
 // only supports images. Plan: add an optional `videos` array (or a `youtubeId` field)
 // alongside `images` in the section schema. The admin UI would let you paste a YouTube
 // URL, extract the video ID, store it, and render an <iframe> embed in the project view.
-function sanitizeSections(sections) {
+function sanitizeSections(sections, { allowTemp = false } = {}) {
   if (!Array.isArray(sections)) return [];
+  const validateSrc = allowTemp ? validateImagePathPermissive : validateImagePath;
   return sections.slice(0, 50).map((s) => ({
     id: typeof s.id === 'string' ? s.id.slice(0, 50) : crypto.randomUUID(),
     heading: (s.heading || '').slice(0, 200),
@@ -1614,7 +1722,7 @@ function sanitizeSections(sections) {
     cols: (typeof s.cols === 'number' && s.cols >= 0) ? Math.min(Math.floor(s.cols), 20) : 0,
     images: Array.isArray(s.images)
       ? s.images.slice(0, 30).map(img => ({
-          src: validateImagePath(img.src),
+          src: validateSrc(img.src),
           alt: (img.alt || '').slice(0, 300),
         })).filter(img => img.src)
       : [],
