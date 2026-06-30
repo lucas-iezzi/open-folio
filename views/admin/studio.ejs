@@ -6,7 +6,6 @@
   <meta name="studio-temp-id" content="<%= tempId %>">
   <meta name="studio-mode" content="<%= typeof mode !== 'undefined' ? mode : 'generate' %>">
   <meta name="studio-edit-slug" content="<%= typeof editSlug !== 'undefined' ? editSlug : '' %>">
-  <meta name="studio-has-draft" content="<%= typeof hasDraft !== 'undefined' && hasDraft ? '1' : '0' %>">
   <% if (typeof initialProjectJson !== 'undefined') { %>
   <script type="application/json" id="studio-initial-data"><%- initialProjectJson %></script>
   <% } %>

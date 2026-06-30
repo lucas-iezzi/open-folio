@@ -149,7 +149,6 @@ const fileCountNote       = $('studio-file-count-note');
 const chatHistory         = $('studio-chat-history');
 const chatInput           = $('studio-chat-input');
 const chatSend            = $('studio-chat-send');
-const chatStatus          = $('studio-chat-status');
 const titleInput          = $('studio-title');
 const slugInput           = $('studio-slug');
 const slugPreview         = $('studio-slug-preview');

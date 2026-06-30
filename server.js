@@ -775,8 +775,6 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
   if (!project) return res.status(404).render('404');
 
   const editProject = project;
-  const hasDraft = false;
-
   const tempId = crypto.randomUUID();
   fs.mkdirSync(path.join(STUDIO_TEMP_BASE, tempId), { recursive: true });
   req.session.studio = {
@@ -808,7 +806,6 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
     tempId:             req.session.studio.tempId,
     mode:               'edit',
     editSlug:           slug,
-    hasDraft,
     previewProject:     editProject,
     initialProjectJson: safeJson,
     folderImagesJson:   safeFolderImages,
@@ -858,7 +855,6 @@ app.post('/admin/projects/:slug/publish-edits', requireAuth, requireCsrf, (req, 
   if (!Array.isArray(proj.sections) || proj.sections.length === 0) {
     const sessionSections = studio?.currentProject?.sections;
     if (Array.isArray(sessionSections) && sessionSections.length > 0) {
-      console.warn('[publish-edits] client sent 0 sections — using session sections as fallback');
       proj.sections = sessionSections;
     }
   }
@@ -1081,20 +1077,6 @@ function discardStudioTemp(tempId) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
-// Remap image srcs from temp paths to permanent paths in a project object
-function remapImagePaths(project, fromTempId, toSlug) {
-  const remap = src => {
-    const file = path.basename(src);
-    return `/images/projects/${toSlug}/${file}`;
-  };
-
-  if (project.thumbnail) project.thumbnail = remap(project.thumbnail);
-  project.sections = (project.sections || []).map(s => ({
-    ...s,
-    images: (s.images || []).map(img => ({ ...img, src: img.src ? remap(img.src) : '' })),
-  }));
-  return project;
-}
 
 // GET /admin/generate — generate new project with AI
 app.get('/admin/generate', requireAuth, (req, res) => {
