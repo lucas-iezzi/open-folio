@@ -5,8 +5,9 @@
 SERVER=root@24.144.117.207
 LOCAL_DB="$(dirname "$0")/../data/portfolio.db"
 LOCAL_IMAGES="$(dirname "$0")/../public/images/"
-REMOTE_DB=$SERVER:~/portfolio/data/portfolio.db
-REMOTE_IMAGES=$SERVER:~/portfolio/public/images/
+# Double quotes prevent local ~ expansion — tilde is expanded on the remote server
+REMOTE_DB="$SERVER:~/portfolio/data/portfolio.db"
+REMOTE_IMAGES="$SERVER:~/portfolio/public/images/"
 
 echo ""
 echo "Sync portfolio — which direction?"
@@ -25,6 +26,10 @@ if [ "$choice" = "1" ]; then
     echo ""
     echo "Pushing images (new project folders will be created automatically)..."
     rsync -avz "$LOCAL_IMAGES" "$REMOTE_IMAGES" || { echo "ERROR: Image sync failed."; exit 1; }
+    echo ""
+    echo ""
+    echo "Cleaning up server temp files..."
+    ssh "$SERVER" 'rm -rf ~/portfolio/public/images/studio-temp/*/; echo "  studio-temp cleared."'
     echo ""
     echo "Restarting app on server..."
     ssh "$SERVER" 'pm2 restart portfolio' || echo "WARNING: pm2 restart failed — restart manually with: pm2 restart portfolio"
