@@ -16,7 +16,7 @@ ssh root@24.144.117.207
 
 ### Deploy a code change
 ```bash
-git pull && pm2 restart portfolio
+cd portfolio && git pull && pm2 restart portfolio
 ```
 
 ### Reset the admin password
