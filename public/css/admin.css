@@ -1252,12 +1252,14 @@ textarea {
   flex-direction: column;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
-  min-height: 0;
   overflow: hidden;
+  /* Closed: min-height = header so it's always visible */
+  min-height: 44px;
 }
 
 .studio-section.is-open {
-  flex: 1;
+  flex: 1 1 0%;  /* grow to fill remaining space; shrink-able so others keep header room */
+  min-height: 120px; /* don't collapse completely even if siblings need space */
 }
 
 .studio-section-header {
@@ -1469,22 +1471,152 @@ textarea {
 .studio-preview {
   display: none;
   position: relative;
-  background: var(--bg);
-  overflow: hidden;
+  background: #fff;
+  flex-direction: column;
 }
 
 .studio-wrap.is-generated .studio-preview {
+  display: flex;
+  min-height: 0;   /* let grid constrain the item's height */
+  overflow: hidden; /* clip children so flex scroll works */
+}
+
+/* Scrollable project content area (edit mode — inline render) */
+.studio-preview-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #fff;
+  /* Match the public site's font and base text color */
+  font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #1a1b1f;
+  font-size: 16px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scoped public-site styles so project content looks identical to the live site */
+.studio-preview-content img { display: block; max-width: 100%; height: auto; }
+.studio-preview-content * { box-sizing: border-box; }
+
+.studio-preview-content .container {
+  width: 100%;
+  padding-inline: 7%;
+}
+
+.studio-preview-content .project-header {
+  margin-top: 44px;
+  margin-bottom: 0;
+}
+
+.studio-preview-content .project-title {
+  font-size: 2.2rem;
+  font-weight: 600;
+  line-height: 2.5rem;
+  margin-bottom: 10px;
+  color: #1a1b1f;
+}
+
+.studio-preview-content .project-subtitle {
+  opacity: 0.6;
+  color: #2c2e36;
+  font-size: 1rem;
+  line-height: 2rem;
+}
+
+.studio-preview-content .project-section {
+  margin-bottom: 48px;
+}
+
+.studio-preview-content .project-section__heading {
+  font-size: 2rem;
+  font-weight: 500;
+  line-height: 2rem;
+  margin-bottom: 10px;
+  padding-top: 42px;
+  color: #1a1b1f;
+}
+
+.studio-preview-content .project-section__body {
+  color: #2c2e36;
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+.studio-preview-content .project-section-images {
+  margin-top: 22px;
+  display: flex;
+  gap: 0;
+}
+
+.studio-preview-content .project-section-images img {
+  flex: 1 1 0%;
+  min-width: 0;
+  width: 0;
+  height: auto;
   display: block;
 }
 
-.studio-preview-frame {
+.studio-preview-content .project-section-images:has(img:only-child) img {
+  flex: none;
   width: 100%;
-  height: 100%;
+}
+
+.studio-preview-content .project-section-images + .project-section-images {
+  margin-top: 0;
+}
+
+/* Edit mode top hint bar */
+.studio-edit-hint {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #f0f4ff;
+  border-bottom: 1px solid #c8d9ff;
+  color: #3a5cc5;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 7px 7%;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Contenteditable elements in the preview */
+.studio-preview-content [contenteditable] {
+  cursor: text;
+  border-radius: 2px;
+  transition: outline 0.1s;
+  /* Keep outline space so layout doesn't jump on hover */
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+}
+.studio-preview-content [contenteditable]:hover {
+  outline: 2px dashed rgba(66, 133, 244, 0.55);
+  outline-offset: 3px;
+}
+.studio-preview-content [contenteditable]:focus {
+  outline: 2px solid #4285f4;
+  outline-offset: 3px;
+  /* keep browser caret visible */
+}
+.studio-preview-content [contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  font-style: italic;
+}
+
+/* iframe only used in generate mode */
+.studio-preview-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   border: none;
   display: none;
 }
 
-/* ── Loading overlay ─────────────────────────────────────────── */
+/* ── Loading overlay (covers the entire preview pane including toolbar) ── */
 .studio-loading {
   position: absolute;
   inset: 0;
@@ -1496,6 +1628,7 @@ textarea {
   gap: 14px;
   font-size: 14px;
   color: var(--muted);
+  z-index: 20;
 }
 
 .studio-loading.is-active {
@@ -1514,6 +1647,8 @@ textarea {
 @keyframes studio-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Shared field / input styles (placeholder, was after toolbar) ── */
 
 /* ── Shared field / input styles ────────────────────────────── */
 .studio-field {
@@ -1806,39 +1941,9 @@ textarea {
   vertical-align: middle;
 }
 
-/* ── Settings panel (replaces tab) ──────────────────────────────────────────── */
-.settings-panel {
-  padding: 32px 0;
-}
-.settings-panel[hidden] { display: none; }
 
-/* ── Nav Settings button ─────────────────────────────────────────────────────── */
-button.admin-nav-link {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-}
 
-/* ── Sidebar collapse ────────────────────────────────────────────────────────── */
-.studio-collapse-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.studio-collapse-btn {
-  display: flex; align-items: center; gap: 6px;
-  background: none; border: 1px solid var(--border); border-radius: 4px;
-  padding: 4px 10px; cursor: pointer; font-size: 12px; font-weight: 500;
-  color: var(--muted); transition: color var(--ease), border-color var(--ease);
-}
-.studio-collapse-btn:hover { color: var(--text); border-color: var(--accent); }
-.studio-collapse-label { font-size: 11px; }
-
-/* Collapsed sidebar: change grid column to 0 */
+/* Collapsed sidebar: preview takes full width */
 .studio-wrap.is-generated.sidebar-collapsed {
   grid-template-columns: 0 1fr;
 }
@@ -1849,10 +1954,95 @@ button.admin-nav-link {
   border-right: none;
 }
 
-/* Edit mode — make the iframe fully interactive */
-.studio-wrap.is-generated .studio-sidebar.is-collapsed + .studio-preview .studio-preview-frame,
-.studio-preview.is-expanded .studio-preview-frame {
+/* Edit mode — iframe interactive when sidebar is collapsed */
+.studio-wrap.is-generated.sidebar-collapsed .studio-preview-frame {
   pointer-events: all;
+}
+
+/* ── Studio edit mode: nav action buttons (upper right) ─────────────────────── */
+.studio-nav-actions {
+  gap: 8px;
+}
+
+.studio-nav-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.studio-nav-status.is-error {
+  color: var(--error, #c0392b);
+}
+
+/* ── Sidebar toggle tab ──────────────────────────────────────────────────────── */
+.studio-sidebar-toggle {
+  position: fixed;
+  left: 320px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 40;
+  width: 16px;
+  height: 64px;
+  /* Same light-blue as the edit hint bar */
+  background: #f0f4ff;
+  border: 1px solid #c8d9ff;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  box-shadow: 3px 0 10px rgba(66,133,244,0.12);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: left 0.22s cubic-bezier(0.4,0,0.2,1), background 0.12s;
+}
+
+/* Chevron — border-right + border-top form a corner; rotation sets direction */
+.studio-sidebar-toggle::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid #3a5cc5;
+  border-top: 1.5px solid #3a5cc5;
+  transform: rotate(225deg); /* corner points left → close */
+  transition: transform 0.18s ease;
+}
+
+/* Collapsed: same shape (tab always protrudes right), only arrow flips */
+.studio-wrap.sidebar-collapsed .studio-sidebar-toggle {
+  left: 0;
+}
+
+.studio-wrap.sidebar-collapsed .studio-sidebar-toggle::after {
+  transform: rotate(45deg); /* corner points right → open */
+}
+
+.studio-sidebar-toggle:hover {
+  background: #e4ecff;
+}
+
+/* ── Thumbnail picker (Metadata section) ─────────────────────────────────────── */
+.studio-thumbnail-preview {
+  display: none;
+  width: 100%;
+  aspect-ratio: 3/2;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.studio-thumbnail-preview.has-image {
+  display: block;
+}
+
+.studio-thumbnail-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 /* ── Edit mode badge in studio nav ──────────────────────────────────────────── */

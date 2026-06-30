@@ -778,8 +778,10 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
     try { editProject = { ...project, ...JSON.parse(project.draft_data) }; hasDraft = true; } catch {}
   }
 
+  const tempId = crypto.randomUUID();
+  fs.mkdirSync(path.join(STUDIO_TEMP_BASE, tempId), { recursive: true });
   req.session.studio = {
-    tempId:         crypto.randomUUID(),
+    tempId,
     editSlug:       slug,
     uploadedFiles:  [],
     description:    '',
@@ -797,6 +799,7 @@ app.get('/admin/projects/:slug/studio', requireAuth, (req, res) => {
     mode:               'edit',
     editSlug:           slug,
     hasDraft,
+    previewProject:     editProject,
     initialProjectJson: safeJson,
   });
 });
@@ -844,6 +847,7 @@ app.post('/admin/projects/:slug/publish-edits', requireAuth, requireCsrf, (req, 
   };
   saveProjects(projects);
   db.prepare('UPDATE projects SET draft_data = NULL WHERE slug = ?').run(slug);
+  if (studio.tempId) discardStudioTemp(studio.tempId);
   delete req.session.studio;
   res.json({ ok: true });
 });
@@ -853,6 +857,8 @@ app.post('/admin/projects/:slug/discard-draft', requireAuth, requireCsrf, (req, 
   if (!db.prepare('SELECT slug FROM projects WHERE slug = ?').get(slug)) {
     return res.status(404).json({ error: 'Not found.' });
   }
+  const studio = req.session.studio;
+  if (studio?.tempId) discardStudioTemp(studio.tempId);
   db.prepare('UPDATE projects SET draft_data = NULL WHERE slug = ?').run(slug);
   delete req.session.studio;
   res.json({ ok: true });
@@ -1051,8 +1057,8 @@ function remapImagePaths(project, fromTempId, toSlug) {
   return project;
 }
 
-// GET /admin/studio
-app.get('/admin/studio', requireAuth, (req, res) => {
+// GET /admin/generate — generate new project with AI
+app.get('/admin/generate', requireAuth, (req, res) => {
   // Keep existing session if one is active — only create fresh if there isn't one
   if (!req.session.studio?.tempId) {
     req.session.studio = {
@@ -1068,6 +1074,11 @@ app.get('/admin/studio', requireAuth, (req, res) => {
     csrfToken: getCsrfToken(req),
     tempId:    req.session.studio.tempId,
   });
+});
+
+// GET /admin/studio — redirect to /admin/generate for backward compat
+app.get('/admin/studio', requireAuth, (req, res) => {
+  res.redirect(301, '/admin/generate');
 });
 
 // POST /admin/studio/restore — re-attach a previous temp folder after server restart
@@ -1316,22 +1327,48 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
   }
 });
 
-// POST /admin/studio/preview — render project.ejs with current project, return HTML string
-app.post('/admin/studio/preview', requireAuth, (req, res) => {
+// GET /admin/studio/preview-page — render project page in iframe (overrides frameAncestors)
+app.get('/admin/studio/preview-page', requireAuth, (req, res) => {
   const project = req.session.studio?.currentProject;
-  if (!project) return res.status(404).json({ error: 'No project to preview.' });
+  if (!project) {
+    return res.status(200).send('<!DOCTYPE html><html><body style="font-family:sans-serif;color:#888;padding:3rem;text-align:center"><p>Loading preview…</p></body></html>');
+  }
+  if (!Array.isArray(project.sections)) project.sections = [];
+  // Override the global frameAncestors:'none' so the admin studio can iframe this page
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "style-src 'self' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob:; " +
+    "script-src 'self'; " +
+    "form-action 'none'; " +
+    "frame-ancestors 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'"
+  );
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.render('project', { project });
+});
 
-  // Render without running through validateImagePath (temp paths wouldn't pass)
-  req.app.render('project', { project }, (err, html) => {
-    if (err) {
-      console.error('[studio/preview]', err);
-      return res.status(500).json({ error: 'Could not render preview.' });
+// POST /admin/studio/preview — render just the project body partial (used by AI chat flow)
+app.post('/admin/studio/preview', requireAuth, (req, res) => {
+  const project = req.body.project || req.session.studio?.currentProject;
+  if (!project) return res.status(404).json({ error: 'No project to preview.' });
+  if (!Array.isArray(project.sections)) project.sections = [];
+
+  const ejs = require('ejs');
+  ejs.renderFile(
+    path.join(__dirname, 'views/partials/project-body.ejs'),
+    { project },
+    { views: path.join(__dirname, 'views') },
+    (err, html) => {
+      if (err) {
+        console.error('[studio/preview]', err);
+        return res.status(500).json({ error: 'Could not render preview.' });
+      }
+      res.json({ html });
     }
-    // Inject base tag so relative URLs resolve correctly inside srcdoc iframe
-    const origin   = `${req.protocol}://${req.get('host')}`;
-    const withBase = html.replace('<head>', `<head><base href="${origin}">`);
-    res.json({ html: withBase });
-  });
+  );
 });
 
 // POST /admin/studio/publish — save to DB, move images to permanent location

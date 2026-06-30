@@ -1,5 +1,13 @@
 'use strict';
 
+// Surface any JS errors visually so they're easy to diagnose
+window.onerror = (msg, _src, line, _col, err) => {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#c0392b;color:#fff;padding:10px 14px;font:13px/1.5 monospace;white-space:pre-wrap;';
+  box.textContent = `studio.js error (line ${line}): ${err?.message || msg}`;
+  document.body?.appendChild(box);
+};
+
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
   generated:        false,
@@ -85,7 +93,7 @@ async function tryRestoreFromStorage() {
 }
 
 function restoreUI(saved) {
-  if (saved.description) description.value = saved.description;
+  if (saved.description && description) description.value = saved.description;
   if (saved.uploadedFiles?.length) {
     state.uploadedFiles = saved.uploadedFiles;
     renderAllFiles();
@@ -95,6 +103,8 @@ function restoreUI(saved) {
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const studioWrap        = $('studio-wrap');
+// Sync collapse state immediately from DOM — edit mode pre-applies sidebar-collapsed server-side
+if (studioWrap?.classList.contains('sidebar-collapsed')) state.sidebarCollapsed = true;
 const dropZone          = $('studio-drop-zone');
 // Attach a throwaway file input off-screen for the duration of the pick,
 // then remove it — browsers require it to be in the DOM to allow .click(),
@@ -148,21 +158,22 @@ const previewFrame      = $('studio-preview-frame');
 const loading           = $('studio-loading');
 const loadingText       = $('studio-loading-text');
 const sidebarUploadBtn  = $('sidebar-upload-btn');
+const sidebarToggleBtn  = $('studio-sidebar-toggle');
 
 const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
-
-$('studio-collapse-btn')?.addEventListener('click', toggleSidebar);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function setStatus(el, msg, isError = false) {
   if (!el) return;
   el.textContent = msg;
-  el.className   = 'studio-status' + (isError ? ' is-error' : '');
+  // publishStatus is .studio-nav-status in edit mode, .studio-status in generate mode
+  const base = el.classList.contains('studio-nav-status') ? 'studio-nav-status' : 'studio-status';
+  el.className = base + (isError ? ' is-error' : '');
 }
 
 function lockButtons(on) {
   state.generating      = on;
-  generateBtn.disabled  = on;
+  if (generateBtn) generateBtn.disabled = on;
   chatSend.disabled     = on;
   chatInput.disabled    = on;
   publishBtn.disabled   = on;
@@ -324,6 +335,7 @@ function fileExt(name) {
 
 // File list shown in the pre-gen form card — includes label inputs
 function renderPregenFileList() {
+  if (!pregenFileList) return;
   pregenFileList.innerHTML = '';
   for (const f of state.uploadedFiles) {
     const item = document.createElement('div');
@@ -385,6 +397,51 @@ function renderAllFiles() {
   renderPregenFileList();
   renderFileGrid();
   updateFileCountNote();
+  populateThumbnailPicker();
+}
+
+// ── Thumbnail picker ──────────────────────────────────────────────────────────
+function populateThumbnailPicker() {
+  const select  = $('studio-thumbnail-select');
+  const preview = $('studio-thumbnail-preview');
+  if (!select) return;
+
+  const images  = state.uploadedFiles.filter(f => f.fileType === 'image');
+  const current = state.currentProject?.thumbnail || '';
+
+  select.innerHTML = '<option value="">— no thumbnail —</option>';
+  images.forEach(f => {
+    const src  = f.permanentPath || f.previewSrc || '';
+    const label = f.tag || f.originalName || f.filename;
+    const opt  = document.createElement('option');
+    opt.value  = src;
+    opt.textContent = label;
+    if (src === current) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  updateThumbnailPreview(current, preview);
+
+  if (!select.dataset.listening) {
+    select.dataset.listening = '1';
+    select.addEventListener('change', () => {
+      const val = select.value;
+      if (state.currentProject) state.currentProject.thumbnail = val;
+      updateThumbnailPreview(val, preview);
+    });
+  }
+}
+
+function updateThumbnailPreview(src, preview) {
+  preview = preview || $('studio-thumbnail-preview');
+  if (!preview) return;
+  if (src) {
+    preview.innerHTML = `<img src="${src}" alt="Thumbnail preview">`;
+    preview.classList.add('has-image');
+  } else {
+    preview.innerHTML = '';
+    preview.classList.remove('has-image');
+  }
 }
 
 // Tag changes (sidebar) — debounce sync to server
@@ -417,21 +474,23 @@ fileGrid.addEventListener('click', async e => {
 });
 
 // Tag changes (pre-gen list) — update state so getTags() picks them up on Generate
-pregenFileList.addEventListener('input', e => {
-  const input = e.target.closest('.studio-pregen-tag-input');
-  if (!input) return;
-  const f = state.uploadedFiles.find(f => f.filename === input.dataset.filename);
-  if (!f) return;
-  f.tag = input.value.slice(0, 80);
-  scheduleSave();
-});
+if (pregenFileList) {
+  pregenFileList.addEventListener('input', e => {
+    const input = e.target.closest('.studio-pregen-tag-input');
+    if (!input) return;
+    const f = state.uploadedFiles.find(f => f.filename === input.dataset.filename);
+    if (!f) return;
+    f.tag = input.value.slice(0, 80);
+    scheduleSave();
+  });
 
-// Remove file (pre-gen list)
-pregenFileList.addEventListener('click', async e => {
-  const btn = e.target.closest('.studio-pregen-file-remove');
-  if (!btn) return;
-  await removeFile(btn.dataset.filename);
-});
+  // Remove file (pre-gen list)
+  pregenFileList.addEventListener('click', async e => {
+    const btn = e.target.closest('.studio-pregen-file-remove');
+    if (!btn) return;
+    await removeFile(btn.dataset.filename);
+  });
+}
 
 async function removeFile(filename) {
   try {
@@ -479,31 +538,33 @@ async function uploadFiles(files) {
 }
 
 // Pre-gen drop zone
-dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('is-over'); });
-dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('is-over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('is-over');
-  uploadFiles(e.dataTransfer.files);
-});
-dropZone.addEventListener('click',   () => pickFiles());
-dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFiles(); } });
+if (dropZone) {
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('is-over'); });
+  dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('is-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('is-over');
+    uploadFiles(e.dataTransfer.files);
+  });
+  dropZone.addEventListener('click',   () => pickFiles());
+  dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickFiles(); } });
+}
 
 // Sidebar "Add files" button
 sidebarUploadBtn.addEventListener('click', () => pickFiles());
-description.addEventListener('input', scheduleSave);
+if (description) description.addEventListener('input', scheduleSave);
 
 // ── Generate ──────────────────────────────────────────────────────────────────
-generateBtn.addEventListener('click', async () => {
+if (generateBtn) generateBtn.addEventListener('click', async () => {
   if (state.generating) return;
-  const desc = description.value.trim();
+  const desc = (description?.value || '').trim();
   if (desc.length < 10) {
     setStatus(generateStatus, 'Please add a project description (at least 10 characters).', true);
     return;
   }
 
-  state.provider = provider.value;
-  state.model    = modelSel.value;
+  state.provider = provider?.value || 'anthropic';
+  state.model    = modelSel?.value || 'claude-sonnet-4-6';
 
   lockButtons(true);
   transitionToPostGen();
@@ -610,15 +671,35 @@ chatInput.addEventListener('keydown', e => {
 
 // ── Preview ───────────────────────────────────────────────────────────────────
 async function refreshPreview() {
-  const res = await fetch('/admin/studio/preview', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-    body:    JSON.stringify({}),
-  });
-  if (!res.ok) return;
-  const data = await res.json();
-  previewFrame.srcdoc        = data.html;
-  previewFrame.style.display = 'block';
+  if (studioMode === 'edit') {
+    // Edit mode: update the inline project content div
+    const res = await fetch('/admin/studio/preview', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+      body:    JSON.stringify({ project: state.currentProject }),
+    });
+    if (!res.ok) return;
+    const { html } = await res.json();
+    const content = $('studio-preview-content');
+    if (content) {
+      content.innerHTML = html;
+      makeTextEditable();
+    }
+  } else {
+    // Generate mode: render full page in iframe via srcdoc
+    const res = await fetch('/admin/studio/preview', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+      body:    JSON.stringify({ project: state.currentProject }),
+    });
+    previewFrame.style.display = 'block';
+    if (!res.ok) return;
+    const { html } = await res.json();
+    await new Promise(resolve => {
+      previewFrame.addEventListener('load', resolve, { once: true });
+      previewFrame.srcdoc = html;
+    });
+  }
 }
 
 // ── Publish & Save Draft ──────────────────────────────────────────────────────
@@ -669,45 +750,67 @@ discardBtn.addEventListener('click', async () => {
 // ── Sidebar collapse ──────────────────────────────────────────────────────────
 function toggleSidebar() {
   state.sidebarCollapsed = !state.sidebarCollapsed;
-  const sidebar = $('studio-sidebar');
-  const preview = $('studio-preview');
   studioWrap.classList.toggle('sidebar-collapsed', state.sidebarCollapsed);
-  sidebar.classList.toggle('is-collapsed', state.sidebarCollapsed);
-  preview.classList.toggle('is-expanded', state.sidebarCollapsed);
-  if (state.sidebarCollapsed) {
-    enableEditMode();
-  } else {
-    disableEditMode();
-    syncFromDOM();
-  }
 }
 
+$('studio-collapse-btn')?.addEventListener('click', toggleSidebar);
+if (sidebarToggleBtn) sidebarToggleBtn.addEventListener('click', toggleSidebar);
+
 // ── Edit mode: init ───────────────────────────────────────────────────────────
-async function initEditMode(project) {
+function initEditMode(project) {
   state.currentProject = project;
   state.generated = true;
-  transitionToPostGen();
+
+  studioWrap.classList.add('is-generated', 'sidebar-collapsed');
+  updateSlug(project?.slug);
+  if (project?.title) titleInput.value = project.title;
   openSection('publish');
-  onGenerated(project, null);
-  await refreshPreview();
-  await new Promise(resolve => {
-    if (previewFrame.contentDocument?.readyState === 'complete') {
-      resolve();
-    } else {
-      previewFrame.addEventListener('load', resolve, { once: true });
-    }
-  });
-  stopLoadingTimer();
+
+  populateProjectFiles(project);
+  renderAllFiles();
+  updateFileCountNote();
+
+  // Project HTML is already in the DOM (server-side rendered) — just activate editing
+  makeTextEditable();
+
   if (hasDraft) {
     const discardEl = document.createElement('button');
-    discardEl.className = 'btn btn-ghost studio-full-btn';
-    discardEl.id = 'studio-discard-draft-btn';
-    discardEl.style.marginTop = '4px';
+    discardEl.className = 'btn btn-sm btn-ghost studio-full-btn';
+    discardEl.style.marginTop = '8px';
     discardEl.textContent = 'Discard Draft';
     discardEl.addEventListener('click', discardDraftEdits);
     $('section-publish-body')?.appendChild(discardEl);
   }
-  enableEditMode();
+}
+
+// ── Edit mode: make text fields contenteditable ───────────────────────────────
+function makeTextEditable() {
+  activateEditing($('studio-preview-content'));
+}
+
+// ── Edit mode: populate sidebar files from project images ─────────────────────
+function populateProjectFiles(project) {
+  const seen = new Set(state.uploadedFiles.map(f => f.permanentPath).filter(Boolean));
+
+  const add = (src, label) => {
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    const fn = src.split('/').pop();
+    state.uploadedFiles.push({
+      filename:     fn,
+      originalName: fn,
+      fileType:     'image',
+      previewSrc:   src,
+      permanentPath: src,
+      fromEditor:   false,
+      tag:          label || '',
+    });
+  };
+
+  if (project.thumbnail) add(project.thumbnail, 'Thumbnail');
+  for (const sec of (project.sections || [])) {
+    for (const img of (sec.images || [])) add(img.src, img.alt || '');
+  }
 }
 
 // ── Edit mode: enable (inject editing UI into iframe) ────────────────────────
@@ -756,22 +859,20 @@ function disableEditMode() {
 
 // ── Edit mode: sync DOM → state ───────────────────────────────────────────────
 let _syncDebounce;
-function syncFromDOM(doc) {
-  doc = doc || previewFrame.contentDocument;
-  if (!doc || !state.currentProject) return;
-  const containers = [...doc.querySelectorAll('main > .container')];
-  if (!containers.length) return;
+function syncFromDOM() {
+  const scope = $('studio-preview-content');
+  if (!scope || !state.currentProject) return;
 
-  const titleEl = containers[0].querySelector('.project-title');
+  const titleEl = scope.querySelector('.project-title');
   if (titleEl) state.currentProject.pageTitle = titleEl.textContent.trim();
 
-  const subtitleEl = containers[0].querySelector('.project-subtitle');
+  const subtitleEl = scope.querySelector('.project-subtitle');
   if (subtitleEl) state.currentProject.subtitle = subtitleEl.textContent.trim();
 
   const sections = state.currentProject.sections;
-  doc.querySelectorAll('main > .container[data-section-id]').forEach(container => {
+  scope.querySelectorAll('[data-section-id]').forEach(container => {
     const sectionId = container.dataset.sectionId;
-    const sec = sections.find(s => s.id === sectionId);
+    const sec = sections.find(s => String(s.id) === String(sectionId));
     if (!sec) return;
     const headingEl = container.querySelector('.project-section__heading');
     if (headingEl) sec.heading = headingEl.textContent.trim();
@@ -790,9 +891,9 @@ function syncFromDOM(doc) {
   });
 }
 
-function scheduleSync(doc) {
+function scheduleSync() {
   clearTimeout(_syncDebounce);
-  _syncDebounce = setTimeout(() => syncFromDOM(doc), 100);
+  _syncDebounce = setTimeout(syncFromDOM, 100);
 }
 
 // ── Edit mode: inject UI into iframe ─────────────────────────────────────────
@@ -949,7 +1050,7 @@ function wrapImageForEdit(doc, img, sectionId) {
       if (idx !== -1) { sec.images.splice(idx, 1); break; }
     }
     wrap.remove();
-    scheduleSync(previewFrame.contentDocument);
+    scheduleSync();
   });
   controls.appendChild(removeBtn);
   img.parentNode.insertBefore(wrap, img);
@@ -1224,8 +1325,49 @@ async function discardDraftEdits() {
 }
 
 // ── Restore on load ───────────────────────────────────────────────────────────
-tryRestoreFromStorage();
+// Skip localStorage restore in edit mode — project data comes from the DB via server session
+if (studioMode !== 'edit') tryRestoreFromStorage();
 
 if (studioMode === 'edit' && initialProject) {
-  initEditMode(initialProject);
+  try {
+    initEditMode(initialProject);
+  } catch (e) {
+    console.error('initEditMode failed:', e);
+    const scope = document.getElementById('studio-preview-content');
+    if (scope) {
+      const errEl = document.createElement('div');
+      errEl.style.cssText = 'background:#fdd;color:#900;padding:12px;font:12px monospace;white-space:pre-wrap;border-bottom:1px solid #f88;';
+      errEl.textContent = 'Edit mode init error:\n' + e.message + '\n' + (e.stack || '');
+      scope.insertBefore(errEl, scope.firstChild);
+      // Fallback: still make text editable even if full init failed
+      activateEditing(scope);
+    }
+  }
+}
+
+function activateEditing(scope) {
+  if (!scope) return;
+  if (!scope.querySelector('.studio-edit-hint')) {
+    const hint = document.createElement('div');
+    hint.className = 'studio-edit-hint';
+    hint.textContent = 'Click any text to edit';
+    scope.insertBefore(hint, scope.firstChild);
+  }
+  [
+    ['.project-title', 'Project title'],
+    ['.project-subtitle', 'Project subtitle'],
+  ].forEach(([sel, ph]) => {
+    const el = scope.querySelector(sel);
+    if (el) { el.contentEditable = 'true'; el.dataset.placeholder = ph; }
+  });
+  scope.querySelectorAll('.project-section').forEach(sec => {
+    const h = sec.querySelector('.project-section__heading');
+    const b = sec.querySelector('.project-section__body');
+    if (h) { h.contentEditable = 'true'; h.dataset.placeholder = 'Section heading'; }
+    if (b) { b.contentEditable = 'true'; b.dataset.placeholder = 'Section body'; }
+  });
+  if (!scope.dataset.editListening) {
+    scope.dataset.editListening = '1';
+    scope.addEventListener('input', scheduleSync);
+  }
 }

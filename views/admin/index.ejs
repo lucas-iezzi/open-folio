@@ -17,7 +17,6 @@
       </a>
       <div class="admin-nav-actions">
         <a href="/" class="admin-nav-link" target="_blank" rel="noopener noreferrer">View site ↗</a>
-        <button type="button" id="nav-settings-btn" class="admin-nav-link">Settings</button>
         <a href="/admin/logout" class="admin-nav-link">Sign out</a>
       </div>
     </div>
@@ -25,76 +24,10 @@
 
   <div class="admin-container">
 
-    <!-- ══ SETTINGS PANEL (hidden by default, toggled by nav button) ═══════════ -->
-    <div id="settings-panel" class="settings-panel" hidden>
-
-      <div class="admin-page-header">
-        <h1 class="admin-page-title">Settings</h1>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">API Keys</div>
-        <p class="settings-section-desc">Keys are written directly to the server's <code>.env</code> file and never returned to this page. The form shows only whether a key is currently set.</p>
-
-        <div class="settings-key-list">
-
-          <div class="settings-key-row">
-            <div class="settings-key-info">
-              <div class="settings-key-name">Anthropic (Claude)</div>
-              <div class="settings-key-status">
-                <% if (apiKeyStatus.ANTHROPIC_API_KEY) { %>
-                  <span class="settings-badge settings-badge--set">Key set</span>
-                <% } else { %>
-                  <span class="settings-badge settings-badge--unset">Not set</span>
-                <% } %>
-              </div>
-            </div>
-            <form class="settings-key-form" data-key="ANTHROPIC_API_KEY">
-              <input
-                type="password"
-                class="settings-key-input"
-                placeholder="sk-ant-…"
-                autocomplete="new-password"
-                spellcheck="false"
-                aria-label="Anthropic API key">
-              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
-            </form>
-            <div class="settings-key-feedback" aria-live="polite"></div>
-          </div>
-
-          <div class="settings-key-row">
-            <div class="settings-key-info">
-              <div class="settings-key-name">OpenAI <span class="settings-key-note">(coming soon)</span></div>
-              <div class="settings-key-status">
-                <% if (apiKeyStatus.OPENAI_API_KEY) { %>
-                  <span class="settings-badge settings-badge--set">Key set</span>
-                <% } else { %>
-                  <span class="settings-badge settings-badge--unset">Not set</span>
-                <% } %>
-              </div>
-            </div>
-            <form class="settings-key-form" data-key="OPENAI_API_KEY">
-              <input
-                type="password"
-                class="settings-key-input"
-                placeholder="sk-…"
-                autocomplete="new-password"
-                spellcheck="false"
-                aria-label="OpenAI API key"
-                disabled>
-              <button type="submit" class="btn btn-secondary btn-sm" disabled>Save</button>
-            </form>
-            <div class="settings-key-feedback" aria-live="polite"></div>
-          </div>
-
-        </div>
-      </div>
-
-    </div><!-- /settings-panel -->
-
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button class="admin-tab is-active" role="tab" aria-selected="true"  aria-controls="tab-projects"  data-tab="projects">Portfolio</button>
       <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-activity"  data-tab="activity">Activity</button>
+      <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-settings"  data-tab="settings">Settings</button>
     </div>
 
     <!-- ══ PROJECTS TAB ══════════════════════════════════════════════ -->
@@ -116,7 +49,7 @@
             </svg>
             Create Project
           </a>
-          <a href="/admin/studio" class="btn btn-primary">✦ Generate Project</a>
+          <a href="/admin/generate" class="btn btn-primary">✦ Generate Project</a>
         </div>
       </div>
       <div id="import-status" style="font-size:13px; margin-bottom:12px;"></div>
@@ -313,6 +246,73 @@
       </div>
 
     </div><!-- /tab-activity -->
+
+    <!-- ══ SETTINGS TAB ══════════════════════════════════════════════ -->
+    <div class="admin-tab-panel" id="tab-settings" role="tabpanel">
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">Settings</h1>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">API Keys</div>
+        <p class="settings-section-desc">Keys are written directly to the server's <code>.env</code> file and never returned to this page. The form shows only whether a key is currently set.</p>
+
+        <div class="settings-key-list">
+
+          <div class="settings-key-row">
+            <div class="settings-key-info">
+              <div class="settings-key-name">Anthropic (Claude)</div>
+              <div class="settings-key-status">
+                <% if (apiKeyStatus.ANTHROPIC_API_KEY) { %>
+                  <span class="settings-badge settings-badge--set">Key set</span>
+                <% } else { %>
+                  <span class="settings-badge settings-badge--unset">Not set</span>
+                <% } %>
+              </div>
+            </div>
+            <form class="settings-key-form" data-key="ANTHROPIC_API_KEY">
+              <input
+                type="password"
+                class="settings-key-input"
+                placeholder="sk-ant-…"
+                autocomplete="new-password"
+                spellcheck="false"
+                aria-label="Anthropic API key">
+              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+            </form>
+            <div class="settings-key-feedback" aria-live="polite"></div>
+          </div>
+
+          <div class="settings-key-row">
+            <div class="settings-key-info">
+              <div class="settings-key-name">OpenAI <span class="settings-key-note">(coming soon)</span></div>
+              <div class="settings-key-status">
+                <% if (apiKeyStatus.OPENAI_API_KEY) { %>
+                  <span class="settings-badge settings-badge--set">Key set</span>
+                <% } else { %>
+                  <span class="settings-badge settings-badge--unset">Not set</span>
+                <% } %>
+              </div>
+            </div>
+            <form class="settings-key-form" data-key="OPENAI_API_KEY">
+              <input
+                type="password"
+                class="settings-key-input"
+                placeholder="sk-…"
+                autocomplete="new-password"
+                spellcheck="false"
+                aria-label="OpenAI API key"
+                disabled>
+              <button type="submit" class="btn btn-secondary btn-sm" disabled>Save</button>
+            </form>
+            <div class="settings-key-feedback" aria-live="polite"></div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /tab-settings -->
 
   </div>
 

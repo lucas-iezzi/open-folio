@@ -1,0 +1,54 @@
+<% /* Project page body content — shared by project.ejs and studio edit mode */ %>
+
+<div class="container">
+  <header class="project-header">
+    <h1 class="project-title"><%= project.pageTitle || project.title %></h1>
+    <% if (project.subtitle) { %>
+    <p class="project-subtitle"><%= project.subtitle %></p>
+    <% } %>
+  </header>
+</div>
+
+<% (project.sections || []).forEach(function(section, idx) { %>
+<div class="container" data-section-id="<%= section.id || idx %>">
+  <section class="project-section">
+
+    <% if (section.heading) { %>
+    <h2 class="project-section__heading"><%= section.heading %></h2>
+    <% } %>
+
+    <% if (section.body) { %>
+    <div class="project-section__body"><%- section.body.replace(/\n/g, '<br>') %></div>
+    <% } %>
+
+    <% if (section.images && section.images.length > 0) { %>
+    <%
+      var _cols = (section.cols && section.cols > 0) ? section.cols : 0;
+      var _rows = [];
+      if (_cols > 0) {
+        for (var _i = 0; _i < section.images.length; _i += _cols) {
+          _rows.push(section.images.slice(_i, _i + _cols));
+        }
+      } else {
+        _rows = [section.images];
+      }
+    %>
+    <% _rows.forEach(function(rowImgs) { %>
+    <div class="project-section-images">
+      <% rowImgs.forEach(function(img) { %>
+      <% if (img.src) { %>
+      <img
+        src="<%= img.src %>"
+        alt="<%= img.alt || section.heading || project.title %>"
+        loading="lazy"
+        decoding="async"
+      >
+      <% } %>
+      <% }); %>
+    </div>
+    <% }); %>
+    <% } %>
+
+  </section>
+</div>
+<% }); %>

@@ -30,7 +30,7 @@
   // ── Init both contexts — each guards itself ───────────────────────
   initDashboard();
   initProjectForm();
-  initSettings();
+
 
   function countryFlag(code) {
     if (!code || code.length !== 2) return '';
@@ -614,20 +614,6 @@
   }
 
   // ── Settings panel toggle ──────────────────────────────────────────────────
-  function initSettings() {
-    const btn   = document.getElementById('nav-settings-btn');
-    const panel = document.getElementById('settings-panel');
-    if (!btn || !panel) return;
-    btn.addEventListener('click', () => {
-      if (panel.hasAttribute('hidden')) {
-        panel.removeAttribute('hidden');
-        panel.scrollIntoView({ behavior: 'smooth' });
-      } else {
-        panel.setAttribute('hidden', '');
-      }
-    });
-  }
-
   // ── Settings: API key forms ────────────────────────────────────────────────
   document.querySelectorAll('.settings-key-form').forEach(form => {
     form.addEventListener('submit', async (e) => {
