@@ -1079,7 +1079,7 @@ TTL:   Auto or 3600</pre>
       }
     }
 
-    chatSend.addEventListener('click', sendDeployChat);
+    chatSend.addEventListener('click', () => sendDeployChat());
     chatInput.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDeployChat(); }
     });
