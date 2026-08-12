@@ -1096,58 +1096,26 @@
 
         carouselRun.disabled = true;
         if (stepStatus) { stepStatus.textContent = 'Running…'; stepStatus.style.color = 'var(--muted)'; }
-
-        // Show live terminal preview immediately
-        if (logSetup) {
-          logSetup.className = 'rs-log rs-log--running';
-          logSetup.style.display = 'block';
-          logSetup.innerHTML = '<pre class="rs-log-terminal" aria-live="polite"></pre>';
-        }
-        const termEl = logSetup ? logSetup.querySelector('.rs-log-terminal') : null;
+        if (logSetup) logSetup.style.display = 'none';
 
         const payload = { command };
         if (command === 'git_clone') payload.repoUrl = 'https://github.com/lucas-iezzi/open-folio';
         if (domain)   payload.domain   = domain;
         if (password) payload.password = password;
 
-        let allOutput = '', finalOk = false;
         try {
-          const res = await fetch('/admin/deploy/ssh-run-stream', {
+          const r = await apiFetch('/admin/deploy/ssh-run', {
             method:  'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken(), 'Accept': 'application/json' },
+            headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(payload),
           });
-          if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Request failed'); }
-
-          const reader  = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buf = '';
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split('\n');
-            buf = lines.pop();
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              const msg = JSON.parse(line);
-              if (msg.text) {
-                allOutput += msg.text;
-                if (termEl) {
-                  termEl.textContent = allOutput.split('\n').filter(l => l.trim()).slice(-4).join('\n');
-                  logSetup.scrollTop = logSetup.scrollHeight;
-                }
-              }
-              if (msg.done) finalOk = msg.ok;
-            }
-          }
-
-          if (stepStatus) { stepStatus.textContent = finalOk ? '✓ Done' : '✗ Failed'; stepStatus.style.color = finalOk ? 'var(--success,#2d8a4e)' : 'var(--danger,#c0392b)'; }
-          if (finalOk && stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
-          showLog(logSetup, finalOk, `Step ${currentStep + 1} ${finalOk ? 'complete' : 'failed'}`, allOutput);
+          const ok = r.ok !== false;
+          if (stepStatus) { stepStatus.textContent = ok ? '✓ Done' : '✗ Failed'; stepStatus.style.color = ok ? 'var(--success,#2d8a4e)' : 'var(--danger,#c0392b)'; }
+          if (ok && stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
+          showLog(logSetup, ok, `Step ${currentStep + 1} ${ok ? 'complete' : 'failed'}`, r.output || r.stdout || r.stderr || '');
         } catch (err) {
           if (stepStatus) { stepStatus.textContent = '✗ Failed'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
-          showLog(logSetup, false, err.message, allOutput || '');
+          showLog(logSetup, false, err.message);
         } finally {
           carouselRun.disabled = false;
         }
