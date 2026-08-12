@@ -1687,7 +1687,7 @@ function sshExec(cfg, command, timeoutMs = 60000) {
   const { host, user, sshPort = 22 } = cfg;
   const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
   if (Number(sshPort) !== 22) args.push('-p', String(sshPort));
-  args.push(`${user}@${host}`, `bash -l -c '${shEsc(command)}'`);
+  args.push(`${user}@${host}`, command);
   const r = spawnSync('ssh', args, { timeout: timeoutMs, encoding: 'utf8', cwd: __dirname });
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
@@ -1712,7 +1712,7 @@ const SSH_CMDS = {
   npm_install:      (rp)           => `cd "${xrp(rp)}" && npm install --omit=dev`,
   pm2_start:        (rp)           => `cd "${xrp(rp)}" && (pm2 describe portfolio > /dev/null 2>&1 && pm2 delete portfolio --silent); (pm2 describe open-folio > /dev/null 2>&1 && pm2 restart open-folio || pm2 start scripts/ecosystem.config.js --env production) && pm2 save`,
   restart:          ()             => 'pm2 restart open-folio',
-  status:           ()             => 'pm2 status && echo "" && df -h / && echo "" && uptime',
+  status:           ()             => '(which pm2 > /dev/null 2>&1 && pm2 status) || echo "⚠  pm2 not installed — run the Install PM2 setup step first"; echo ""; df -h / ; echo ""; uptime',
   logs:             ()             => 'pm2 logs open-folio --lines 80 --nostream',
   git_pull:         (rp)           => `cd "${xrp(rp)}" && git pull && npm install --omit=dev && pm2 restart open-folio`,
   git_clone:        (rp, url)      => `git clone '${shEsc(url)}' "${xrp(rp)}"`,
@@ -1979,7 +1979,7 @@ app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal,
   const { host, user, sshPort = 22 } = srv;
   const sshArgs = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
   if (Number(sshPort) !== 22) sshArgs.push('-p', String(sshPort));
-  sshArgs.push(`${user}@${host}`, `bash -l -c '${shEsc(cmd)}'`);
+  sshArgs.push(`${user}@${host}`, cmd);
 
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');

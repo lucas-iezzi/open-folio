@@ -900,7 +900,6 @@
     }
 
     // showLog: ok=null→running, ok=true→success, ok=false→error
-    // stdout shown as expandable details when provided
     function showLog(logEl, ok, text, stdout) {
       if (!logEl) return;
       logEl.className = 'rs-log rs-log--' + (ok === null ? 'running' : ok ? 'ok' : 'err');
@@ -911,7 +910,9 @@
       }
       const icon = ok ? '✓' : '✗';
       if (stdout && stdout.trim()) {
-        logEl.innerHTML = `<span>${icon} ${escHtml(text)}</span><details style="margin-top:.35rem"><summary class="rs-log-summary">Show output</summary><pre class="rs-log-pre">${escHtml(stdout.trim())}</pre></details>`;
+        // Auto-open on failure so the error is immediately visible
+        const open = ok ? '' : ' open';
+        logEl.innerHTML = `<span>${icon} ${escHtml(text)}</span><details${open} style="margin-top:.35rem"><summary class="rs-log-summary">${ok ? 'Show output' : 'Error output'}</summary><pre class="rs-log-pre">${escHtml(stdout.trim())}</pre></details>`;
       } else {
         logEl.textContent = `${icon} ${text}`;
       }
