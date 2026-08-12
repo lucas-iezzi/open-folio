@@ -1987,7 +1987,9 @@ app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal,
 
   const slowCmds = new Set(['apt_update', 'node_install', 'caddy_install', 'server_setup']);
   const timeoutMs = slowCmds.has(command) ? 180000 : 60000;
-  const proc = spawn('ssh', sshArgs);
+  // stdin must be 'ignore' (not the default 'pipe') so Windows OpenSSH
+  // doesn't keep the connection open waiting for stdin EOF.
+  const proc = spawn('ssh', sshArgs, { stdio: ['ignore', 'pipe', 'pipe'], cwd: __dirname });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
 
   const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch {} };
