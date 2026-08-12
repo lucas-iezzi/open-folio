@@ -1,0 +1,1272 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>open-folio · Launcher</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --sidebar-w: 216px;
+  --bg: #f0f2f5;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --primary: #2563eb;
+  --primary-h: #1d4ed8;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --sidebar: #16181d;
+  --sidebar-txt: #94a3b8;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  font-size: 14px;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--sidebar);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 10;
+}
+
+.sidebar-brand {
+  padding: 26px 20px 18px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); flex-shrink: 0; }
+
+.sidebar-nav { padding: 14px 10px; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 11px;
+  border: none;
+  background: transparent;
+  color: var(--sidebar-txt);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 7px;
+  text-align: left;
+  transition: background .14s, color .14s;
+}
+.nav-btn svg { flex-shrink: 0; opacity: .65; }
+.nav-btn:hover { background: rgba(255,255,255,.06); color: #e2e8f0; }
+.nav-btn.active { background: var(--primary); color: #fff; }
+.nav-btn.active svg { opacity: 1; }
+
+.sidebar-footer {
+  padding: 14px 20px;
+  font-size: 11px;
+  color: rgba(255,255,255,.22);
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+
+/* ── Main ────────────────────────────────────────────────────────────── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  padding: 30px 32px;
+  min-height: 100vh;
+}
+
+.tab { display: none; }
+.tab.active { display: block; }
+
+.page-header { margin-bottom: 22px; }
+.page-header h1 { font-size: 21px; font-weight: 700; }
+.page-header p  { margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  margin-bottom: 18px;
+}
+
+.card-title { font-size: 14px; font-weight: 600; margin-bottom: 5px; }
+.card-desc  { font-size: 13px; color: var(--muted); margin-bottom: 16px; line-height: 1.55; }
+.card-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+
+/* ── Status card ─────────────────────────────────────────────────────── */
+.server-card {
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 100%);
+  border-color: transparent;
+  color: #fff;
+}
+
+.server-status { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
+
+.status-dot {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: #64748b;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+.status-dot.running  { background: #4ade80; box-shadow: 0 0 7px rgba(74,222,128,.5); }
+.status-dot.stopped  { background: #f87171; }
+.status-dot.checking { background: #fbbf24; animation: blink 1.4s ease infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+.status-label { font-size: 17px; font-weight: 600; }
+
+.server-links { display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap; }
+.server-link {
+  font-size: 12px;
+  color: rgba(255,255,255,.85);
+  text-decoration: none;
+  background: rgba(255,255,255,.12);
+  padding: 4px 11px;
+  border-radius: 20px;
+  transition: background .14s;
+}
+.server-link:hover { background: rgba(255,255,255,.22); color: #fff; }
+
+.server-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background .14s, transform .08s;
+  text-decoration: none;
+  color: #fff;
+  background: var(--primary);
+  white-space: nowrap;
+}
+.btn:hover   { background: var(--primary-h); }
+.btn:active  { transform: scale(.98); }
+.btn:disabled{ opacity: .5; cursor: not-allowed; }
+
+.btn-danger  { background: var(--danger); }
+.btn-danger:hover { background: #b91c1c; }
+.btn-success { background: var(--success); }
+.btn-success:hover { background: #15803d; }
+.btn-ghost   { background: rgba(255,255,255,.14); backdrop-filter: blur(4px); }
+.btn-ghost:hover { background: rgba(255,255,255,.24); }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-outline:hover { background: var(--bg); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* ── System checks ───────────────────────────────────────────────────── */
+.checks { display: flex; flex-direction: column; gap: 9px; }
+.check-item { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.check-icon {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.check-icon.ok   { background: #dcfce7; color: var(--success); }
+.check-icon.err  { background: #fee2e2; color: var(--danger); }
+.check-icon.warn { background: #fef3c7; color: var(--warning); }
+
+/* ── Terminal ────────────────────────────────────────────────────────── */
+.terminal {
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #e6edf3;
+  min-height: 72px;
+  max-height: 380px;
+  overflow-y: auto;
+  margin-top: 14px;
+  word-break: break-all;
+}
+.term-out   { color: #e6edf3; }
+.term-err   { color: #fca5a5; }
+.term-info  { color: #93c5fd; font-style: italic; }
+.term-done  { color: #86efac; font-weight: 600; }
+.term-error { color: #f87171; font-weight: 600; }
+
+/* ── Forms ───────────────────────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.form-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.input {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  transition: border-color .14s, box-shadow .14s;
+}
+.input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.1);
+}
+.form-row  { display: flex; gap: 9px; align-items: flex-start; flex-wrap: wrap; }
+.form-note { font-size: 12px; color: var(--muted); margin-top: 7px; }
+
+/* ── Provider cards ──────────────────────────────────────────────────── */
+.provider-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.provider-card {
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  transition: border-color .14s;
+}
+.provider-card.active { border-color: var(--primary); }
+.provider-name  { font-weight: 600; font-size: 13.5px; margin-bottom: 3px; }
+.provider-hint  { font-size: 11px; color: var(--muted); font-family: monospace; margin-bottom: 10px; }
+.provider-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 20px;
+  display: inline-block;
+  margin-bottom: 12px;
+}
+.badge-active { background: #dbeafe; color: var(--primary); }
+.badge-set    { background: #dcfce7; color: var(--success); }
+.badge-empty  { background: #f1f5f9; color: var(--muted); }
+
+/* ── SSH setup ───────────────────────────────────────────────────────── */
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 12px;
+  margin-top: 6px;
+}
+.key-row code {
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssh-steps { display: flex; flex-direction: column; gap: 16px; margin-top: 20px; }
+.step { display: flex; gap: 13px; }
+.step-num {
+  width: 26px; height: 26px;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  flex-shrink: 0; margin-top: 1px;
+}
+.step-text { font-size: 13px; line-height: 1.6; flex: 1; }
+
+/* ── Action row (push/pull) ──────────────────────────────────────────── */
+.action-row  { display: flex; gap: 14px; flex-wrap: wrap; }
+.action-cell { flex: 1; min-width: 180px; }
+.action-cell .btn { width: 100%; justify-content: center; margin-bottom: 5px; }
+.action-note { font-size: 12px; color: var(--muted); text-align: center; }
+
+/* ── Content sync redesign ───────────────────────────────────────────── */
+.btn-push-main { width: 100%; justify-content: center; padding: 12px 18px; font-size: 15px; font-weight: 600; }
+.sync-secondary { display: flex; gap: 12px; flex-wrap: wrap; }
+.sync-secondary-cell { flex: 1; min-width: 180px; }
+.sync-section-divider { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px; }
+.sync-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.sync-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.backup-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.backup-row:last-child { border-bottom: none; }
+.backup-info { flex: 1; min-width: 0; }
+.backup-name { font-size: 12px; font-weight: 600; color: var(--text); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.backup-meta { font-size: 11px; color: var(--muted); }
+.backup-btns { display: flex; gap: 5px; flex-shrink: 0; }
+.compare-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.compare-title { font-weight: 500; flex: 1; }
+.compare-slug { font-size: 11px; color: var(--muted); background: var(--bg); padding: 1px 5px; border-radius: 3px; }
+
+/* ── Setup guide ─────────────────────────────────────────────────────── */
+.setup-steps { margin-top: 16px; }
+.setup-step { display: flex; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.setup-step:last-of-type { border-bottom: none; padding-bottom: 0; }
+.setup-num { width: 26px; height: 26px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.setup-body { flex: 1; }
+.setup-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.setup-desc { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.setup-cmd { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+/* ── Remote grid ─────────────────────────────────────────────────────── */
+.remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.remote-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color .14s, box-shadow .14s;
+  text-align: center;
+}
+.remote-btn:hover { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.07); }
+.remote-btn:disabled { opacity: .5; cursor: not-allowed; }
+.remote-btn svg   { color: var(--primary); }
+.remote-btn span  { font-size: 13px; font-weight: 500; color: var(--text); }
+.remote-btn small { font-size: 11px; color: var(--muted); }
+
+/* ── Toasts ──────────────────────────────────────────────────────────── */
+#toasts {
+  position: fixed; bottom: 22px; right: 22px;
+  display: flex; flex-direction: column; gap: 7px;
+  z-index: 1000;
+}
+.toast {
+  background: #1e293b; color: #f1f5f9;
+  padding: 11px 15px; border-radius: 8px;
+  font-size: 13px; max-width: 300px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  animation: tin .18s ease;
+  border-left: 3px solid var(--primary);
+}
+.toast.ok  { border-color: var(--success); }
+.toast.err { border-color: var(--danger); }
+@keyframes tin { from { transform: translateX(16px); opacity: 0; } }
+
+/* ── Setup overlay ───────────────────────────────────────────────────── */
+#setup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(5px);
+}
+.setup-box {
+  background: #fff;
+  border-radius: 14px;
+  padding: 34px 36px;
+  width: 460px; max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,.28);
+}
+.setup-box h2 { font-size: 19px; font-weight: 700; margin-bottom: 5px; }
+.setup-box > p { font-size: 13px; color: var(--muted); margin-bottom: 22px; line-height: 1.55; }
+.setup-field { margin-bottom: 12px; }
+.setup-field label { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
+.prov-row { display: flex; gap: 7px; margin-bottom: 10px; }
+.prov-opt {
+  flex: 1; padding: 7px 4px;
+  border: 2px solid var(--border);
+  border-radius: 7px;
+  text-align: center; font-size: 12px; font-weight: 500;
+  cursor: pointer; background: #fff;
+  transition: border-color .14s, color .14s;
+}
+.prov-opt.sel { border-color: var(--primary); color: var(--primary); }
+
+.hidden { display: none !important; }
+
+/* ── Scrollbar ───────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- Setup overlay -->
+<div id="setup-overlay" class="hidden">
+  <div class="setup-box">
+    <h2>Welcome to open-folio</h2>
+    <p>Let's get you set up. This only takes a minute — everything can be changed later.</p>
+
+    <div class="setup-field">
+      <label>Admin Password</label>
+      <input type="password" id="s-pw"  placeholder="Min 10 characters" class="input" style="margin-bottom:8px">
+      <input type="password" id="s-pw2" placeholder="Confirm password"   class="input">
+    </div>
+
+    <div class="setup-field">
+      <label>AI Provider <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#94a3b8">— optional, skip for now</span></label>
+      <div class="prov-row">
+        <button class="prov-opt" data-p="anthropic">Anthropic</button>
+        <button class="prov-opt" data-p="openai">OpenAI</button>
+        <button class="prov-opt" data-p="gemini">Gemini</button>
+        <button class="prov-opt sel" data-p="">Skip</button>
+      </div>
+      <input type="text" id="s-key" class="input hidden" placeholder="API key">
+    </div>
+
+    <div class="setup-field">
+      <label>Port</label>
+      <input type="number" id="s-port" value="3000" class="input" style="max-width:110px">
+    </div>
+
+    <button id="s-submit" class="btn" style="width:100%;justify-content:center;padding:11px;margin-top:6px">
+      Set Up &amp; Continue
+    </button>
+  </div>
+</div>
+
+<!-- App shell -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-dot"></div>
+    open-folio
+  </div>
+  <nav class="sidebar-nav">
+    <button class="nav-btn active" data-tab="home">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Home
+    </button>
+    <button class="nav-btn" data-tab="settings">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </button>
+    <button class="nav-btn" data-tab="deploy">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Web Server
+    </button>
+  </nav>
+  <div class="sidebar-footer">Launcher · localhost:3001</div>
+</aside>
+
+<main class="main">
+
+  <!-- ── Home ── -->
+  <div id="tab-home" class="tab active">
+    <div class="page-header"><h1>Dashboard</h1></div>
+
+    <div class="card server-card">
+      <div class="server-status">
+        <div class="status-dot checking" id="status-dot"></div>
+        <div class="status-label" id="status-label">Checking...</div>
+      </div>
+      <div class="server-links">
+        <a id="link-site"  href="#" target="_blank" class="server-link hidden">Open Site</a>
+        <a id="link-admin" href="#" target="_blank" class="server-link hidden">Admin Panel</a>
+      </div>
+      <div class="server-actions">
+        <button id="btn-start"   class="btn btn-success">Start Server</button>
+        <button id="btn-restart" class="btn btn-ghost   hidden">Restart</button>
+        <button id="btn-stop"    class="btn btn-danger  hidden">Stop</button>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px;text-align:center">Server runs in the background — closing this window won't stop it.</p>
+      <div style="text-align:center;margin-top:6px">
+        <button id="btn-quit-launcher" style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:2px 0">Close Launcher</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">System</h3>
+      <div class="checks" id="sys-checks">
+        <div class="check-item"><div class="check-icon warn">?</div><span>Loading...</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header-row">
+        <h3 class="card-title">Server Log</h3>
+        <button id="btn-view-log" class="btn btn-outline btn-sm">View Log</button>
+      </div>
+      <div class="terminal hidden" id="log-out"></div>
+    </div>
+  </div>
+
+  <!-- ── Settings ── -->
+  <div id="tab-settings" class="tab">
+    <div class="page-header"><h1>Settings</h1></div>
+
+    <div class="card">
+      <h3 class="card-title">AI Provider</h3>
+      <p class="card-desc">Powers the AI Studio, Sandbox assistant, and Deploy chat. Enter your key and click to activate.</p>
+      <div class="provider-grid" id="prov-cards"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Admin Password</h3>
+      <form id="form-pw" autocomplete="off">
+        <div class="form-row">
+          <input type="password" id="pw-a" placeholder="New password (min 10 characters)" class="input" style="flex:1">
+          <input type="password" id="pw-b" placeholder="Confirm" class="input" style="flex:1">
+          <button type="submit" class="btn">Update</button>
+        </div>
+        <p class="form-note">Restart the server to apply.</p>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Port</h3>
+      <form id="form-port">
+        <div class="form-row">
+          <input type="number" id="inp-port" placeholder="3000" class="input" style="max-width:120px">
+          <button type="submit" class="btn">Update</button>
+        </div>
+        <p class="form-note">Restart the server to apply.</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Web Server ── -->
+  <div id="tab-deploy" class="tab">
+    <div class="page-header">
+      <h1>Web Server</h1>
+      <p>Purchase a VPS, enter your connection info, and this tool will walk you through getting your site live.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Server Connection</h3>
+      <p class="card-desc">Your hosting server details. Saved locally and never committed to git.</p>
+      <form id="form-cfg">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Server IP or Hostname</label>
+            <input type="text"   id="cfg-host"    placeholder="e.g. 192.168.1.1"  class="input">
+          </div>
+          <div class="form-field">
+            <label>SSH Username</label>
+            <input type="text"   id="cfg-user"    placeholder="root"               class="input">
+          </div>
+          <div class="form-field">
+            <label>SSH Port</label>
+            <input type="number" id="cfg-port"    placeholder="22"                 class="input">
+          </div>
+          <div class="form-field">
+            <label>Remote Project Path</label>
+            <input type="text"   id="cfg-path"    placeholder="~/open-folio"       class="input">
+          </div>
+        </div>
+        <button type="submit" class="btn">Save Connection</button>
+      </form>
+    </div>
+
+    <div class="card" id="card-getting-started">
+      <div class="card-header-row">
+        <div>
+          <h3 class="card-title">Getting Started</h3>
+          <p class="card-desc" style="margin-top:3px">New to self-hosting? Follow these steps once to go from a fresh server to a live site.</p>
+        </div>
+        <button id="btn-toggle-setup" class="btn btn-outline btn-sm">Show</button>
+      </div>
+      <div id="setup-steps" class="setup-steps hidden">
+        <div class="setup-step">
+          <div class="setup-num">1</div>
+          <div class="setup-body">
+            <div class="setup-title">Add your SSH key to the server</div>
+            <p class="setup-desc">This lets this tool connect without a password. See <strong>SSH Key Setup</strong> at the bottom of this page — copy the command and run it in your server provider's web console.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-num">2</div>
+          <div class="setup-body">
+            <div class="setup-title">Clone &amp; install open-folio on the server</div>
+            <p class="setup-desc">Downloads the open-folio code to your server and installs dependencies. Requires git and Node.js 18+ on the server.</p>
+            <button id="btn-clone-install" class="btn btn-sm" style="margin-top:8px">Run on Server</button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-num">3</div>
+          <div class="setup-body">
+            <div class="setup-title">Run first-time configuration on the server</div>
+            <p class="setup-desc">Open an SSH terminal and run <code class="setup-cmd">npm run setup</code> to set your admin password and configure environment variables.</p>
+            <button id="btn-ssh-setup" class="btn btn-outline btn-sm" style="margin-top:8px">Open SSH Terminal</button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-num">4</div>
+          <div class="setup-body">
+            <div class="setup-title">Push your content to the server</div>
+            <p class="setup-desc">Uploads your local database and all images so the site has your data.</p>
+            <button id="btn-push-setup" class="btn btn-sm" style="margin-top:8px">↑ Push to Server</button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-num">5</div>
+          <div class="setup-body">
+            <div class="setup-title">Start the site with PM2</div>
+            <p class="setup-desc">PM2 keeps your site running after you disconnect. Install it first with <code class="setup-cmd">npm install -g pm2 &amp;&amp; pm2 startup</code> via SSH, then click below.</p>
+            <button id="btn-pm2-start" class="btn btn-sm" style="margin-top:8px">Start Site</button>
+          </div>
+        </div>
+        <div class="terminal hidden" id="setup-out"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Content Sync</h3>
+      <p class="card-desc">Push local content to the server whenever you update your portfolio.</p>
+
+      <button id="btn-push" class="btn btn-push-main">↑&nbsp;&nbsp;Push to Server</button>
+      <p style="font-size:12px;color:var(--muted);margin-top:6px;margin-bottom:20px;text-align:center">Uploads database and all images to the server</p>
+
+      <div class="sync-secondary">
+        <div class="sync-secondary-cell">
+          <button id="btn-pull" class="btn btn-outline" style="width:100%;justify-content:center">↓&nbsp;&nbsp;Create Server Backup</button>
+          <p class="action-note" style="margin-top:5px">Saves a timestamped snapshot of the server database</p>
+        </div>
+        <div class="sync-secondary-cell">
+          <button id="btn-replace" class="btn btn-danger" style="width:100%;justify-content:center">↓&nbsp;&nbsp;Replace Local with Server</button>
+          <p class="action-note" style="color:var(--danger);margin-top:5px">Overwrites local database &amp; images (auto-backs up first)</p>
+        </div>
+      </div>
+
+      <div class="sync-section-divider">
+        <div class="sync-section-header">
+          <span class="sync-section-label">Project Comparison</span>
+          <button id="btn-compare" class="btn btn-outline btn-sm">Compare</button>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:6px">Shows which projects exist locally vs on the server so you can sync specific ones.</p>
+        <div id="compare-result" class="hidden" style="font-size:13px"></div>
+      </div>
+
+      <div class="sync-section-divider">
+        <div class="sync-section-header">
+          <span class="sync-section-label">Local Backups</span>
+          <button id="btn-refresh-backups" class="btn btn-outline btn-sm">Refresh</button>
+        </div>
+        <div id="backups-list" style="font-size:13px;color:var(--muted);margin-top:4px">No backups yet</div>
+      </div>
+
+      <div class="terminal hidden" id="sync-out"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Remote Server</h3>
+      <div class="remote-grid">
+        <button class="remote-btn" id="btn-ssh">
+          <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span>Open SSH Terminal</span>
+          <small>Opens a new terminal window</small>
+        </button>
+        <button class="remote-btn" id="btn-r-restart">
+          <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+          <span>Restart Site</span>
+          <small>PM2 restart</small>
+        </button>
+        <button class="remote-btn" id="btn-r-logs">
+          <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>View Logs</span>
+          <small>Last 60 lines</small>
+        </button>
+        <button class="remote-btn" id="btn-r-update">
+          <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>Update Code</span>
+          <small>git pull + restart</small>
+        </button>
+        <button class="remote-btn" id="btn-r-status">
+          <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>Server Status</span>
+          <small>PM2 + disk + uptime</small>
+        </button>
+      </div>
+      <div class="terminal hidden" id="remote-out"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">SSH Key Setup</h3>
+      <p class="card-desc">Your SSH public key must be added to the server once before anything below will work.</p>
+
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">Your public key</div>
+        <div class="key-row">
+          <code id="ssh-key">Loading...</code>
+          <button id="btn-copy-key" class="btn btn-outline btn-sm">Copy</button>
+        </div>
+      </div>
+
+      <div class="ssh-steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-text">Open your server provider's web console, or use any existing terminal access to your server.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-text">
+            Run this command on the server:
+            <div class="key-row" style="margin-top:8px">
+              <code id="ssh-cmd" style="white-space:normal;word-break:break-all">Loading...</code>
+              <button id="btn-copy-cmd" class="btn btn-outline btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-text">Return here — the controls below will now connect successfully.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toasts"></div>
+
+<script>
+'use strict';
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+
+let _status = null;
+
+function toast(msg, type = 'info') {
+  const el = Object.assign(document.createElement('div'), { className: `toast ${type}`, textContent: msg });
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Request failed');
+  return d;
+}
+
+function streamSSE(url, el) {
+  el.innerHTML = '';
+  el.classList.remove('hidden');
+  return new Promise((resolve) => {
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      const line = document.createElement('div');
+      line.className = 'term-' + (m.type || 'out');
+      line.textContent = m.text || '';
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+      if (m.type === 'done' || m.type === 'error') { es.close(); resolve(m.type === 'done'); }
+    };
+    es.onerror = () => {
+      const line = document.createElement('div');
+      line.className = 'term-error';
+      line.textContent = 'Connection closed.';
+      el.appendChild(line);
+      es.close();
+      resolve(false);
+    };
+  });
+}
+
+function copy(text) {
+  navigator.clipboard.writeText(text)
+    .then(() => toast('Copied to clipboard', 'ok'))
+    .catch(() => toast('Copy failed — select the text manually', 'err'));
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'deploy') initDeploy();
+  });
+});
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+async function loadStatus() {
+  try {
+    _status = await api('GET', '/api/status');
+    renderStatus(_status);
+    if (_status.setupNeeded) document.getElementById('setup-overlay').classList.remove('hidden');
+  } catch {}
+}
+
+function renderStatus(s) {
+  const dot   = document.getElementById('status-dot');
+  const label = document.getElementById('status-label');
+  const btnStart   = document.getElementById('btn-start');
+  const btnRestart = document.getElementById('btn-restart');
+  const btnStop    = document.getElementById('btn-stop');
+  const linkSite   = document.getElementById('link-site');
+  const linkAdmin  = document.getElementById('link-admin');
+
+  if (s.server.running) {
+    dot.className  = 'status-dot running';
+    label.textContent = 'Running on port ' + s.server.port;
+    btnStart.classList.add('hidden');
+    btnRestart.classList.remove('hidden');
+    btnStop.classList.remove('hidden');
+    linkSite.href  = s.server.url;       linkSite.classList.remove('hidden');
+    linkAdmin.href = s.server.adminUrl;  linkAdmin.classList.remove('hidden');
+  } else {
+    dot.className = 'status-dot stopped';
+    label.textContent = 'Server stopped';
+    btnStart.classList.remove('hidden');
+    btnRestart.classList.add('hidden');
+    btnStop.classList.add('hidden');
+    linkSite.classList.add('hidden');
+    linkAdmin.classList.add('hidden');
+  }
+
+  // System checks
+  const checks = [
+    { ok: s.node.ok, label: 'Node.js v' + s.node.version + (s.node.ok ? '' : ' — requires v18+') },
+    { ok: s.deps.ok, label: s.deps.ok ? 'Dependencies installed' : 'Dependencies missing — run: npm install' },
+    { ok: s.env.ok,  label: s.env.ok  ? 'Configuration file found' : 'No .env — run setup' },
+    { ok: s.pw.ok,   label: s.pw.ok   ? 'Admin password configured' : 'Admin password not set — run setup' },
+    { ok: s.ai.ok,   warn: !s.ai.ok,  label: s.ai.ok ? 'AI enabled (' + s.ai.provider + ')' : 'No AI key — AI features disabled (add one in Settings)' },
+  ];
+  document.getElementById('sys-checks').innerHTML = checks.map(c => `
+    <div class="check-item">
+      <div class="check-icon ${c.ok ? 'ok' : c.warn ? 'warn' : 'err'}">${c.ok ? '✓' : c.warn ? '!' : '✗'}</div>
+      <span>${c.label}</span>
+    </div>
+  `).join('');
+
+  // Port input hint
+  const pi = document.getElementById('inp-port');
+  if (pi && !pi.value) pi.value = s.server.port;
+
+  renderProviders(s);
+}
+
+// ── Server controls ───────────────────────────────────────────────────────────
+
+async function doStart() {
+  const btn = document.getElementById('btn-start');
+  btn.disabled = true; btn.textContent = 'Starting...';
+  try {
+    const r = await api('POST', '/api/server/start');
+    toast(r.running ? 'Server started' : 'Server failed to start — check the log', r.running ? 'ok' : 'err');
+  } catch (e) { toast(e.message, 'err'); }
+  btn.disabled = false; btn.textContent = 'Start Server';
+  loadStatus();
+}
+
+async function doRestart() {
+  const btn = document.getElementById('btn-restart');
+  btn.disabled = true; btn.textContent = 'Restarting...';
+  try {
+    await api('POST', '/api/server/stop');
+    const r = await api('POST', '/api/server/start');
+    toast(r.running ? 'Server restarted' : 'Restart failed — check the log', r.running ? 'ok' : 'err');
+  } catch (e) { toast(e.message, 'err'); }
+  btn.disabled = false; btn.textContent = 'Restart';
+  loadStatus();
+}
+
+document.getElementById('btn-start').addEventListener('click', doStart);
+document.getElementById('btn-restart').addEventListener('click', doRestart);
+document.getElementById('btn-stop').addEventListener('click', async () => {
+  await api('POST', '/api/server/stop');
+  toast('Server stopped', 'info');
+  loadStatus();
+});
+
+document.getElementById('btn-view-log').addEventListener('click', () => {
+  streamSSE('/api/server/log', document.getElementById('log-out'));
+});
+
+// ── Settings: providers ───────────────────────────────────────────────────────
+
+function renderProviders(s) {
+  const c = document.getElementById('prov-cards');
+  if (!c) return;
+  const provs = [
+    { id: 'anthropic', name: 'Anthropic (Claude)', hint: 'sk-ant-…', set: s.ai.anthropicSet },
+    { id: 'openai',    name: 'OpenAI',             hint: 'sk-…',     set: s.ai.openaiSet },
+    { id: 'gemini',    name: 'Google Gemini',       hint: 'AIza…',    set: s.ai.geminiSet },
+  ];
+  c.innerHTML = provs.map(p => {
+    const active = s.ai.provider === p.id;
+    const badge  = active ? 'badge-active' : p.set ? 'badge-set' : 'badge-empty';
+    const blabel = active ? 'Active' : p.set ? 'Key saved' : 'Not configured';
+    return `
+      <div class="provider-card ${active ? 'active' : ''}">
+        <div class="provider-name">${p.name}</div>
+        <div class="provider-hint">${p.hint}</div>
+        <div class="provider-badge ${badge}">${blabel}</div>
+        <form data-id="${p.id}" style="display:flex;flex-direction:column;gap:7px">
+          <input type="text" placeholder="API Key" class="input" style="font-size:12px" autocomplete="off">
+          <button type="submit" class="btn btn-sm" style="justify-content:center">
+            ${active ? 'Update Key' : p.set ? 'Switch + Update Key' : 'Set Active'}
+          </button>
+        </form>
+      </div>`;
+  }).join('');
+
+  c.querySelectorAll('form').forEach(f => {
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const prov = f.dataset.id;
+      const key  = f.querySelector('input').value.trim();
+      try {
+        await api('POST', '/api/settings/ai-key', { provider: prov, key: key || undefined });
+        toast(prov + ' set as active provider', 'ok');
+        loadStatus();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+  });
+}
+
+// ── Settings: password + port ─────────────────────────────────────────────────
+
+document.getElementById('form-pw').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = document.getElementById('pw-a').value;
+  const p2 = document.getElementById('pw-b').value;
+  if (pw !== p2)      { toast('Passwords do not match', 'err'); return; }
+  if (pw.length < 10) { toast('Password must be at least 10 characters', 'err'); return; }
+  try {
+    await api('POST', '/api/settings/password', { password: pw });
+    toast('Password updated — restart the server to apply', 'ok');
+    document.getElementById('pw-a').value = '';
+    document.getElementById('pw-b').value = '';
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+document.getElementById('form-port').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const port = parseInt(document.getElementById('inp-port').value, 10);
+  try {
+    await api('POST', '/api/settings/port', { port });
+    toast('Port changed to ' + port + ' — restart the server to apply', 'ok');
+    loadStatus();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// ── Deploy tab init ───────────────────────────────────────────────────────────
+
+let _deployInited = false;
+async function initDeploy() {
+  // Fill server config form
+  try {
+    const s = _status || await api('GET', '/api/status');
+    if (s.serverConfig) {
+      document.getElementById('cfg-host').value = s.serverConfig.host        || '';
+      document.getElementById('cfg-user').value = s.serverConfig.user        || '';
+      document.getElementById('cfg-port').value = s.serverConfig.sshPort     || 22;
+      document.getElementById('cfg-path').value = s.serverConfig.remotePath  || '~/open-folio';
+      // Auto-hide setup guide if server is already configured (not first time)
+      if (!_deployInited) {
+        document.getElementById('setup-steps').classList.add('hidden');
+        document.getElementById('btn-toggle-setup').textContent = 'Show';
+      }
+    } else {
+      // No server configured — show setup guide by default
+      document.getElementById('setup-steps').classList.remove('hidden');
+      document.getElementById('btn-toggle-setup').textContent = 'Hide';
+    }
+  } catch {}
+
+  // Load SSH key
+  try {
+    const k = await api('GET', '/api/ssh-key');
+    const pub = k.pubKey || '(could not generate key — install OpenSSH)';
+    const sshUser = document.getElementById('cfg-user').value.trim() || 'root';
+    const baseCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${k.pubKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;
+    const cmd = k.pubKey
+      ? (sshUser === 'root' ? baseCmd : `sudo -u ${sshUser} bash -c '${baseCmd}'`)
+      : '';
+    document.getElementById('ssh-key').textContent = pub;
+    document.getElementById('ssh-cmd').textContent = cmd || '(no key available)';
+    document.getElementById('btn-copy-key').onclick = () => copy(pub);
+    document.getElementById('btn-copy-cmd').onclick = () => copy(cmd);
+  } catch {}
+
+  if (!_deployInited) {
+    loadBackups();
+    _deployInited = true;
+  }
+}
+// Server config form
+document.getElementById('form-cfg').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('POST', '/api/server-config', {
+      host:       document.getElementById('cfg-host').value.trim(),
+      user:       document.getElementById('cfg-user').value.trim() || 'root',
+      sshPort:    parseInt(document.getElementById('cfg-port').value, 10) || 22,
+      remotePath: document.getElementById('cfg-path').value.trim() || '~/open-folio',
+    });
+    toast('Server connection saved', 'ok');
+    loadStatus();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// ── Quit Launcher ─────────────────────────────────────────────────────────────
+document.getElementById('btn-quit-launcher').addEventListener('click', async () => {
+  if (!confirm('Close the launcher? The portfolio server will keep running in the background.')) return;
+  try { await api('POST', '/api/launcher/quit'); } catch {}
+  window.close();
+  setTimeout(() => document.body.innerHTML = '<p style="padding:40px;font-family:sans-serif;color:#64748b">Launcher closed. You can close this tab.</p>', 500);
+});
+
+// ── Getting Started ───────────────────────────────────────────────────────────
+document.getElementById('btn-toggle-setup').addEventListener('click', () => {
+  const steps = document.getElementById('setup-steps');
+  const btn   = document.getElementById('btn-toggle-setup');
+  const hidden = steps.classList.toggle('hidden');
+  btn.textContent = hidden ? 'Show' : 'Hide';
+});
+
+document.getElementById('btn-clone-install').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-clone-install');
+  btn.disabled = true; btn.textContent = 'Running...';
+  await streamSSE('/api/deploy/clone-install', document.getElementById('setup-out'));
+  btn.disabled = false; btn.textContent = 'Run on Server';
+});
+
+document.getElementById('btn-ssh-setup').addEventListener('click', async () => {
+  try { await api('POST', '/api/deploy/ssh-terminal'); toast('SSH terminal opened', 'ok'); }
+  catch (err) { toast(err.message, 'err'); }
+});
+
+document.getElementById('btn-push-setup').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-push-setup');
+  btn.disabled = true; btn.textContent = 'Pushing...';
+  const ok = await streamSSE('/api/deploy/push', document.getElementById('setup-out'));
+  toast(ok ? 'Push complete' : 'Push finished with errors', ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '↑ Push to Server';
+});
+
+document.getElementById('btn-pm2-start').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-pm2-start');
+  btn.disabled = true; btn.textContent = 'Starting...';
+  await streamSSE('/api/deploy/pm2-start', document.getElementById('setup-out'));
+  btn.disabled = false; btn.textContent = 'Start Site';
+});
+
+// ── Content Sync ──────────────────────────────────────────────────────────────
+document.getElementById('btn-push').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-push');
+  btn.disabled = true; btn.textContent = 'Pushing...';
+  const ok = await streamSSE('/api/deploy/push', document.getElementById('sync-out'));
+  toast(ok ? 'Push complete' : 'Push finished with errors', ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '↑  Push to Server';
+});
+
+document.getElementById('btn-pull').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-pull');
+  btn.disabled = true; btn.textContent = 'Downloading...';
+  const ok = await streamSSE('/api/deploy/pull', document.getElementById('sync-out'));
+  toast(ok ? 'Backup created' : 'Backup failed', ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '↓  Create Server Backup';
+  if (ok) loadBackups();
+});
+
+document.getElementById('btn-replace').addEventListener('click', async () => {
+  if (!confirm("This will overwrite your local database and all images with the server's content. A backup of your current local database will be saved first.\n\nContinue?")) return;
+  const btn = document.getElementById('btn-replace');
+  btn.disabled = true; btn.textContent = 'Replacing...';
+  const ok = await streamSSE('/api/deploy/pull-replace', document.getElementById('sync-out'));
+  toast(ok ? 'Local content replaced' + String.fromCharCode(0x2014) + 'start the server to see changes' : 'Replace finished with errors', ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '↓  Replace Local with Server';
+  if (ok) { loadBackups(); loadStatus(); }
+});
+
+// ── Backups ───────────────────────────────────────────────────────────────────
+async function loadBackups() {
+  const el = document.getElementById('backups-list');
+  try {
+    const { backups } = await api('GET', '/api/backups');
+    if (!backups.length) {
+      el.innerHTML = '<span style="color:var(--muted)">No backups yet.</span>';
+      return;
+    }
+    el.innerHTML = backups.map(b => {
+      const size = b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : Math.round(b.size / 1024) + ' KB';
+      const date = new Date(b.mtime).toLocaleString();
+      return '<div class="backup-row" data-file="' + b.filename + '">' +
+        '<div class="backup-info"><span class="backup-name">' + b.filename.replace('.db', '') + '</span><span class="backup-meta">' + date + ' &middot; ' + size + '</span></div>' +
+        '<div class="backup-btns">' +
+        '<button class="btn btn-outline btn-sm btn-rl" data-file="' + b.filename + '">Restore Local</button>' +
+        '<button class="btn btn-outline btn-sm btn-rs" data-file="' + b.filename + '">Push to Server</button>' +
+        '<button class="btn btn-sm btn-del" data-file="' + b.filename + '" style="background:#fee2e2;color:var(--danger);border:none">&times;</button>' +
+        '</div></div>';
+    }).join('');
+
+    el.querySelectorAll('.btn-rl').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Restore "' + b.dataset.file + '" as your local database? The server will be stopped if running.')) return;
+      try {
+        const r = await api('POST', '/api/deploy/restore-local', { filename: b.dataset.file });
+        toast('Local database restored' + (r.wasRunning ? ' ' + String.fromCharCode(0x2014) + ' restart the server when ready' : ''), 'ok');
+        loadStatus();
+      } catch (e) { toast(e.message, 'err'); }
+    }));
+
+    el.querySelectorAll('.btn-rs').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Push "' + b.dataset.file + '" to the server as portfolio.db? This will overwrite the server database.')) return;
+      await streamSSE('/api/deploy/restore-server?filename=' + encodeURIComponent(b.dataset.file), document.getElementById('sync-out'));
+    }));
+
+    el.querySelectorAll('.btn-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete backup "' + b.dataset.file + '"?')) return;
+      try { await api('DELETE', '/api/backups/' + encodeURIComponent(b.dataset.file)); loadBackups(); }
+      catch (e) { toast(e.message, 'err'); }
+    }));
+  } catch { el.textContent = 'Failed to load backups.'; }
+}
+
+document.getElementById('btn-refresh-backups').addEventListener('click', loadBackups);
+
+// ── Compare ───────────────────────────────────────────────────────────────────
+document.getElementById('btn-compare').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-compare');
+  const el  = document.getElementById('compare-result');
+  btn.disabled = true; btn.textContent = 'Comparing...';
+  el.classList.remove('hidden');
+  el.innerHTML = '<span style="color:var(--muted)">Connecting to server' + String.fromCharCode(0x2026) + '</span>';
+  try {
+    const d = await api('GET', '/api/deploy/compare');
+    el.innerHTML = renderCompare(d);
+    el.querySelectorAll('.btn-pp').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Pushing' + String.fromCharCode(0x2026);
+      await streamSSE('/api/deploy/push-project?slug=' + encodeURIComponent(b.dataset.slug), document.getElementById('sync-out'));
+      b.disabled = false; b.textContent = '↑ Push';
+    }));
+    el.querySelectorAll('.btn-pl').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Pulling' + String.fromCharCode(0x2026);
+      await streamSSE('/api/deploy/pull-project?slug=' + encodeURIComponent(b.dataset.slug), document.getElementById('sync-out'));
+      b.disabled = false; b.textContent = '↓ Pull';
+    }));
+  } catch (e) { el.innerHTML = '<span style="color:var(--danger)">Error: ' + e.message + '</span>'; }
+  btn.disabled = false; btn.textContent = 'Compare';
+});
+
+function renderCompare(d) {
+  if (d.remoteError && !d.remote.length)
+    return '<span style="color:var(--danger)">Could not read server: ' + d.remoteError + '</span>';
+  if (!d.localOnly.length && !d.remoteOnly.length)
+    return '<span style="color:#16a34a">' + String.fromCharCode(0x2713) + ' All ' + d.both.length + ' project(s) are on both local and server.</span>';
+  let html = '';
+  if (d.localOnly.length)
+    html += '<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:5px">Local only</div>' +
+      d.localOnly.map(p => '<div class="compare-row"><span class="compare-title">' + p.title + '</span><code class="compare-slug">' + p.slug + '</code><button class="btn btn-sm btn-pp" data-slug="' + p.slug + '">↑ Push</button></div>').join('') + '</div>';
+  if (d.remoteOnly.length)
+    html += '<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:5px">Server only</div>' +
+      d.remoteOnly.map(p => '<div class="compare-row"><span class="compare-title">' + p.title + '</span><code class="compare-slug">' + p.slug + '</code><button class="btn btn-sm btn-pl" data-slug="' + p.slug + '">↓ Pull</button></div>').join('') + '</div>';
+  if (d.both.length)
+    html += '<div style="font-size:12px;color:var(--muted)">' + String.fromCharCode(0x2713) + ' On both: ' + d.both.map(p => p.title).join(', ') + '</div>';
+  return html;
+}
+
+// ── SSH terminal ──────────────────────────────────────────────────────────────
+document.getElementById('btn-ssh').addEventListener('click', async () => {
+  try { await api('POST', '/api/deploy/ssh-terminal'); toast('SSH terminal opened', 'ok'); }
+  catch (err) { toast(err.message, 'err'); }
+});
+// Remote buttons
+function remoteBtn(btnId, endpoint, label) {
+  document.getElementById(btnId).addEventListener('click', async () => {
+    const btn = document.getElementById(btnId);
+    btn.disabled = true;
+    const ok = await streamSSE('/api/deploy/' + endpoint, document.getElementById('remote-out'));
+    toast(ok ? label + ' done' : label + ' finished with errors', ok ? 'ok' : 'err');
+    btn.disabled = false;
+  });
+}
+
+remoteBtn('btn-r-restart', 'restart', 'Restart');
+remoteBtn('btn-r-logs',    'logs',    'Logs');
+remoteBtn('btn-r-update',  'update',  'Update');
+remoteBtn('btn-r-status',  'status',  'Status');
+
+// ── Setup overlay ─────────────────────────────────────────────────────────────
+
+let _setupProv = '';
+document.querySelectorAll('.prov-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.prov-opt').forEach(b => b.classList.remove('sel'));
+    btn.classList.add('sel');
+    _setupProv = btn.dataset.p;
+    const ki = document.getElementById('s-key');
+    if (_setupProv) {
+      ki.classList.remove('hidden');
+      ki.placeholder = _setupProv === 'anthropic' ? 'sk-ant-…' : _setupProv === 'openai' ? 'sk-…' : 'AIza…';
+    } else {
+      ki.classList.add('hidden');
+    }
+  });
+});
+
+document.getElementById('s-submit').addEventListener('click', async () => {
+  const pw  = document.getElementById('s-pw').value;
+  const pw2 = document.getElementById('s-pw2').value;
+  if (!pw || pw.length < 10) { toast('Password must be at least 10 characters', 'err'); return; }
+  if (pw !== pw2)            { toast('Passwords do not match', 'err'); return; }
+  const btn = document.getElementById('s-submit');
+  btn.disabled = true; btn.textContent = 'Setting up...';
+  try {
+    await api('POST', '/api/setup', {
+      password: pw,
+      provider: _setupProv || undefined,
+      apiKey:   document.getElementById('s-key').value.trim() || undefined,
+      port:     parseInt(document.getElementById('s-port').value, 10) || 3000,
+    });
+    document.getElementById('setup-overlay').classList.add('hidden');
+    toast('Setup complete — start the server when ready', 'ok');
+    loadStatus();
+  } catch (err) {
+    toast(err.message, 'err');
+    btn.disabled = false; btn.textContent = 'Set Up & Continue';
+  }
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadStatus();
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

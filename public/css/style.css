@@ -134,20 +134,22 @@ main { flex: 1; }
   height: var(--nav-height);
 }
 
-/* Left: icon logo */
-.nav-brand-icon {
+/* Left: small logo slot */
+.nav-logo-small {
   display: flex;
   align-items: center;
-  text-decoration: none;
 }
+.nav-logo-small a { display: flex; align-items: center; text-decoration: none; margin-top: 22px; }
+.nav-logo-small img { height: var(--logo-nav-size, 52px); width: auto; max-width: 200px; object-fit: contain; display: block; }
 
-/* Center: wordmark logo */
-.nav-brand-wordmark {
+/* Center: logomark slot */
+.nav-logo-mark {
   display: flex;
   align-items: center;
   justify-content: center;
-  text-decoration: none;
 }
+.nav-logo-mark a { display: flex; align-items: center; text-decoration: none; margin-top: 22px; }
+.nav-logo-mark img { height: var(--logo-nav-size, 52px); width: auto; max-width: 400px; object-fit: contain; display: block; }
 
 /* Right: links + hamburger */
 .nav-right {
@@ -156,39 +158,20 @@ main { flex: 1; }
   justify-content: flex-end;
 }
 
-/* Logo images */
-.nav-brand-icon img {
-  height: 52px;
-  width: auto;
-  display: block;
-  margin-top: 22px;
+/* Hero logo slots — hidden by default; enable via UI Sandbox (logo.showMark / logo.showSmall) */
+.hero-logo-small,
+.hero-logo-mark {
+  display: none;
+  margin-bottom: 1rem;
 }
-
-.nav-brand-wordmark img {
-  height: 52px;
-  width: auto;
-  display: block;
-  margin-top: 22px;
-}
-
-/* Logo placeholders (shown while images load / if missing) */
-.nav-placeholder--icon {
-  width: 32px;
-  height: 40px;
-  background: var(--color-placeholder);
-  border-radius: 50% 50% 48% 48% / 40% 40% 60% 60%;
-}
-
-.nav-placeholder--wordmark {
-  height: 28px;
-  width: 170px;
-  background: var(--color-placeholder);
-  border-radius: 3px;
-}
+.hero-logo-small { align-items: flex-start; }
+.hero-logo-mark  { align-items: center; justify-content: center; }
+.hero-logo-small img { height: 48px; width: auto; max-width: 120px; object-fit: contain; }
+.hero-logo-mark  img { height: 52px; width: auto; max-width: 240px; object-fit: contain; }
 
 @media (max-width: 768px) {
   .nav-inner { grid-template-columns: auto 1fr auto; }
-  .nav-brand-wordmark { display: none; }
+  .nav-logo-mark { display: none !important; }
 }
 
 /* Desktop nav links */

@@ -9,11 +9,11 @@
   }
 
   async function apiFetch(url, options = {}) {
-    const headers = { 'X-CSRF-Token': getCsrfToken(), ...options.headers };
+    const headers = { 'X-CSRF-Token': getCsrfToken(), 'Accept': 'application/json', ...options.headers };
     const res = await fetch(url, { ...options, headers });
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json() : await res.text();
-    if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
+    if (!res.ok) throw new Error(typeof body === 'object' ? (body?.error || `Request failed (${res.status})`) : `Request failed (${res.status})`);
     return body;
   }
 
@@ -613,9 +613,180 @@
     }
   }
 
-  // ── Settings panel toggle ──────────────────────────────────────────────────
-  // ── Settings: API key forms ────────────────────────────────────────────────
-  document.querySelectorAll('.settings-key-form').forEach(form => {
+  // ── Settings: site identity (name + tagline) ─────────────────────────────
+  const siteIdentityForm = document.getElementById('site-identity-form');
+  if (siteIdentityForm) {
+    siteIdentityForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('site-identity-feedback');
+      const btn = siteIdentityForm.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      feedback.textContent = 'Saving…';
+      feedback.style.color = 'var(--muted)';
+      try {
+        await apiFetch('/admin/settings/site-info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            siteName:    document.getElementById('site-name-input').value,
+            siteTagline: document.getElementById('site-tagline-input').value,
+          }),
+        });
+        feedback.textContent = 'Saved.';
+        feedback.style.color = 'var(--success, green)';
+      } catch (err) {
+        feedback.textContent = err.message;
+        feedback.style.color = 'var(--danger, red)';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ── Settings: logo upload / delete ───────────────────────────────────────
+  document.querySelectorAll('.logo-file-input').forEach(input => {
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const type = input.dataset.type;
+      const feedback = document.querySelector(`.logo-upload-feedback[data-type="${type}"]`);
+      if (!feedback) return;
+      feedback.textContent = 'Uploading…';
+      feedback.style.color = 'var(--muted)';
+
+      const fd = new FormData();
+      fd.append('image', file);
+      fd.append('type', type);
+
+      try {
+        const res = await fetch('/admin/settings/logo', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': getCsrfToken() },
+          body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        feedback.textContent = 'Saved — reloading…';
+        feedback.style.color = 'var(--success, green)';
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        console.error('[logo upload]', err);
+        feedback.textContent = err.message;
+        feedback.style.color = 'var(--danger, red)';
+        input.value = '';
+      }
+    });
+  });
+
+  document.querySelectorAll('.logo-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const type = btn.dataset.type;
+      const feedback = document.querySelector(`.logo-upload-feedback[data-type="${type}"]`);
+      if (!feedback) return;
+      btn.disabled = true;
+      feedback.textContent = 'Removing…';
+      feedback.style.color = 'var(--muted)';
+      try {
+        await apiFetch(`/admin/settings/logo/${type}`, { method: 'DELETE' });
+        feedback.textContent = 'Removed — reloading…';
+        feedback.style.color = 'var(--success, green)';
+        setTimeout(() => location.reload(), 700);
+      } catch (err) {
+        console.error('[logo delete]', err);
+        feedback.textContent = err.message;
+        feedback.style.color = 'var(--danger, red)';
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // ── Settings: nav logo size slider ───────────────────────────────────────
+  const logoSizeSlider = document.getElementById('logo-size-slider');
+  if (logoSizeSlider) {
+    const sizeValue    = document.getElementById('logo-size-value');
+    const sizeFeedback = document.getElementById('logo-size-feedback');
+
+    // Logarithmic mapping: slider 0→50→100 corresponds to 26px→52px→104px.
+    // 52 lands exactly at center because 52 = 26 × 2^(50/50).
+    function sliderToPx(v)  { return Math.round(26 * Math.pow(2, v / 50)); }
+    function pxToSlider(px) { return Math.round(50 * Math.log2(px / 26)); }
+
+    const initial = parseInt(logoSizeSlider.dataset.size) || 52;
+    logoSizeSlider.value  = pxToSlider(initial);
+    sizeValue.textContent = initial + 'px';
+
+    let saveTimer;
+    logoSizeSlider.addEventListener('input', () => {
+      const px = sliderToPx(parseInt(logoSizeSlider.value));
+      sizeValue.textContent = px + 'px';
+      document.documentElement.style.setProperty('--logo-nav-size', px + 'px');
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try {
+          await apiFetch('/admin/settings/logo-size', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ size: px }),
+          });
+          sizeFeedback.textContent = 'Saved.';
+          sizeFeedback.style.color = 'var(--success, #2d8a4e)';
+          setTimeout(() => { sizeFeedback.textContent = ''; }, 2000);
+        } catch (err) {
+          sizeFeedback.textContent = err.message;
+          sizeFeedback.style.color = 'var(--danger, #c0392b)';
+        }
+      }, 500);
+    });
+  }
+
+  // ── Settings: admin password change ──────────────────────────────────────
+  const adminPwForm = document.getElementById('admin-password-form');
+  if (adminPwForm) {
+    adminPwForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const current  = document.getElementById('admin-pw-current').value;
+      const newPw    = document.getElementById('admin-pw-new').value;
+      const confirm  = document.getElementById('admin-pw-confirm').value;
+      const feedback = document.getElementById('admin-password-feedback');
+      const btn      = adminPwForm.querySelector('button[type="submit"]');
+
+      feedback.textContent = '';
+
+      if (newPw.length < 10) {
+        feedback.textContent = 'New password must be at least 10 characters.';
+        feedback.style.color = 'var(--danger, #c0392b)';
+        return;
+      }
+      if (newPw !== confirm) {
+        feedback.textContent = 'Passwords do not match.';
+        feedback.style.color = 'var(--danger, #c0392b)';
+        return;
+      }
+
+      btn.disabled = true;
+      feedback.textContent = 'Saving…';
+      feedback.style.color = 'var(--muted)';
+
+      try {
+        await apiFetch('/admin/settings/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ current, newPassword: newPw }),
+        });
+        feedback.textContent = 'Password updated.';
+        feedback.style.color = 'var(--success, #2d8a4e)';
+        adminPwForm.reset();
+      } catch (err) {
+        feedback.textContent = err.message;
+        feedback.style.color = 'var(--danger, #c0392b)';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ── Settings: provider key forms ──────────────────────────────────────────
+  document.querySelectorAll('.provider-key-form').forEach(form => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const key      = form.dataset.key;
@@ -634,19 +805,547 @@
         await apiFetch('/admin/settings/api-key', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ key, value }),
+          body:    JSON.stringify({ key, value, activate: true }),
         });
-        input.value          = '';
-        input.placeholder    = '••• saved — reload to see status update •••';
-        feedback.textContent = 'Saved successfully.';
+        feedback.textContent = 'Saved — reloading…';
         feedback.className   = 'settings-key-feedback is-success';
+        setTimeout(() => location.reload(), 900);
       } catch (err) {
         feedback.textContent = err.message;
         feedback.className   = 'settings-key-feedback is-error';
-      } finally {
         btn.disabled = false;
       }
     });
   });
+
+  // ── Settings: switch active provider ──────────────────────────────────────
+  document.querySelectorAll('.provider-switch-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const pid = btn.dataset.provider;
+      btn.disabled = true;
+      btn.textContent = 'Switching…';
+      const feedback = btn.previousElementSibling;
+      try {
+        await apiFetch('/admin/settings/api-key', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ key: 'AI_PROVIDER', value: pid }),
+        });
+        feedback.textContent = 'Switched — reloading…';
+        feedback.className   = 'settings-key-feedback is-success';
+        setTimeout(() => location.reload(), 700);
+      } catch (err) {
+        feedback.textContent = err.message;
+        feedback.className   = 'settings-key-feedback is-error';
+        btn.disabled = false;
+        btn.textContent = 'Switch to this provider';
+      }
+    });
+  });
+
+  // ── Settings: secret access word ──────────────────────────────────────────
+  const accessTokenForm = document.getElementById('access-token-form');
+  if (accessTokenForm) {
+    accessTokenForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token    = document.getElementById('access-token-input').value.trim();
+      const feedback = document.getElementById('access-token-feedback');
+      const btn      = accessTokenForm.querySelector('button[type="submit"]');
+
+      if (token && token.length < 6) {
+        feedback.textContent = 'Must be at least 6 characters.';
+        feedback.style.color = 'var(--danger, #c0392b)';
+        return;
+      }
+
+      btn.disabled = true;
+      feedback.textContent = 'Saving…';
+      feedback.style.color = 'var(--muted)';
+      try {
+        await apiFetch('/admin/settings/access-token', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ token }),
+        });
+        feedback.textContent = token ? 'Secret word enabled.' : 'Disabled.';
+        feedback.style.color = 'var(--success, #2d8a4e)';
+        setTimeout(() => location.reload(), 1000);
+      } catch (err) {
+        feedback.textContent = err.message;
+        feedback.style.color = 'var(--danger, #c0392b)';
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // -- Remote Server tab -------------------------------------------------------
+  (function initRemoteServer() {
+    if (!document.getElementById('rs-creds-card')) return;
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // showLog: ok=null→running, ok=true→success, ok=false→error
+    // stdout shown as expandable details when provided
+    function showLog(logEl, ok, text, stdout) {
+      if (!logEl) return;
+      logEl.className = 'rs-log rs-log--' + (ok === null ? 'running' : ok ? 'ok' : 'err');
+      logEl.style.display = 'block';
+      if (ok === null) {
+        logEl.textContent = text;
+        return;
+      }
+      const icon = ok ? '✓' : '✗';
+      if (stdout && stdout.trim()) {
+        logEl.innerHTML = `<span>${icon} ${escHtml(text)}</span><details style="margin-top:.35rem"><summary class="rs-log-summary">Show output</summary><pre class="rs-log-pre">${escHtml(stdout.trim())}</pre></details>`;
+      } else {
+        logEl.textContent = `${icon} ${text}`;
+      }
+    }
+
+    const rsConnDot  = document.getElementById('rs-conn-dot');
+    const rsConnHost = document.getElementById('rs-conn-host-label');
+    const rsCredsFB  = document.getElementById('rs-creds-feedback');
+    const rsSshCmd   = document.getElementById('rs-ssh-cmd');
+    const logSync    = document.getElementById('rs-log-sync');
+    const logCmds    = document.getElementById('rs-log-cmds');
+    const logSetup   = document.getElementById('rs-log-setup');
+
+    function getCredsFromForm() {
+      return {
+        host:       document.getElementById('rs-host').value.trim(),
+        user:       document.getElementById('rs-user').value.trim(),
+        sshPort:    parseInt(document.getElementById('rs-port').value) || 22,
+        remotePath: document.getElementById('rs-rpath').value.trim(),
+      };
+    }
+
+    function updateSshCmd(cfg) {
+      if (!rsSshCmd) return;
+      if (!cfg.host || !cfg.user) { rsSshCmd.textContent = '(save credentials first)'; return; }
+      const portArg = cfg.sshPort && cfg.sshPort !== 22 ? ` -p ${cfg.sshPort}` : '';
+      rsSshCmd.textContent = `ssh${portArg} ${cfg.user}@${cfg.host}`;
+    }
+
+    updateSshCmd(getCredsFromForm());
+
+    async function testConnection(silent) {
+      if (!silent) {
+        rsCredsFB.textContent = 'Testing connection…';
+        rsCredsFB.style.color = 'var(--muted)';
+      }
+      if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--unknown';
+      try {
+        const r = await apiFetch('/admin/deploy/test', { method: 'POST' });
+        if (!silent) {
+          rsCredsFB.textContent = r.message || 'Connected.';
+          rsCredsFB.style.color = 'var(--success, #2d8a4e)';
+          setTimeout(() => { rsCredsFB.textContent = ''; }, 2500);
+        }
+        if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--ok';
+      } catch (err) {
+        if (!silent) {
+          rsCredsFB.textContent = err.message;
+          rsCredsFB.style.color = 'var(--danger, #c0392b)';
+        }
+        if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--err';
+      }
+    }
+
+    // Auto-test on load if credentials are configured
+    const cfg0 = getCredsFromForm();
+    if (cfg0.host && cfg0.user) testConnection(true);
+
+    // Save then immediately test connection
+    const rsSaveBtn = document.getElementById('rs-save-creds');
+    if (rsSaveBtn) {
+      rsSaveBtn.addEventListener('click', async () => {
+        const cfg = getCredsFromForm();
+        rsSaveBtn.disabled = true;
+        rsCredsFB.textContent = 'Saving…';
+        rsCredsFB.style.color = 'var(--muted)';
+        try {
+          await apiFetch('/admin/deploy/config', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(cfg),
+          });
+          if (rsConnHost) rsConnHost.textContent = cfg.host || 'Not configured';
+          updateSshCmd(cfg);
+          await testConnection(false);
+        } catch (err) {
+          rsCredsFB.textContent = err.message;
+          rsCredsFB.style.color = 'var(--danger, #c0392b)';
+        } finally {
+          rsSaveBtn.disabled = false;
+        }
+      });
+    }
+
+    // ── Carousel ──
+    const stepPanels  = Array.from(document.querySelectorAll('.rs-step-panel'));
+    const stepDots    = Array.from(document.querySelectorAll('.rs-dot'));
+    const prevBtn     = document.getElementById('rs-prev-step');
+    const nextBtn     = document.getElementById('rs-next-step');
+    const carouselRun = document.getElementById('rs-carousel-run');
+    const stepStatus  = document.getElementById('rs-step-status');
+    let currentStep   = 0;
+
+    function goToStep(n) {
+      if (n < 0 || n >= stepPanels.length) return;
+      stepPanels[currentStep].classList.remove('active');
+      if (stepDots[currentStep]) stepDots[currentStep].classList.remove('rs-dot--active');
+      currentStep = n;
+      stepPanels[currentStep].classList.add('active');
+      if (stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--active');
+      if (prevBtn) prevBtn.disabled = currentStep === 0;
+      if (nextBtn) nextBtn.disabled = currentStep === stepPanels.length - 1;
+      const cmd = stepPanels[currentStep].dataset.cmd;
+      if (carouselRun) {
+        carouselRun.style.display = cmd ? '' : 'none';
+        if (cmd) {
+          carouselRun.dataset.cmd          = cmd;
+          carouselRun.dataset.needsDomain  = stepPanels[currentStep].dataset.needsDomain  || 'false';
+          carouselRun.dataset.needsPassword= stepPanels[currentStep].dataset.needsPassword || 'false';
+        }
+      }
+      if (stepStatus) stepStatus.textContent = '';
+      if (logSetup) logSetup.style.display = 'none';
+    }
+
+    if (prevBtn) prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
+    if (nextBtn) nextBtn.addEventListener('click', () => goToStep(currentStep + 1));
+    stepDots.forEach((dot, i) => dot.addEventListener('click', () => goToStep(i)));
+
+    if (carouselRun) {
+      carouselRun.addEventListener('click', async () => {
+        const command      = carouselRun.dataset.cmd;
+        const needsDomain  = carouselRun.dataset.needsDomain  === 'true';
+        const needsPassword= carouselRun.dataset.needsPassword === 'true';
+        const domain       = needsDomain   ? (document.getElementById('rs-domain-input')?.value.trim()   || '') : '';
+        const password     = needsPassword ? (document.getElementById('rs-setup-password')?.value         || '') : '';
+
+        if (needsDomain && !domain) {
+          if (stepStatus) { stepStatus.textContent = 'Enter your domain first.'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
+          return;
+        }
+        if (needsPassword && password.length < 10) {
+          if (stepStatus) { stepStatus.textContent = 'Password must be at least 10 characters.'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
+          return;
+        }
+
+        carouselRun.disabled = true;
+        if (stepStatus) { stepStatus.textContent = 'Running…'; stepStatus.style.color = 'var(--muted)'; }
+        if (logSetup) logSetup.style.display = 'none';
+
+        try {
+          const payload = { command };
+          if (command === 'git_clone') payload.repoUrl = 'https://github.com/lucas-iezzi/open-folio';
+          if (domain)   payload.domain   = domain;
+          if (password) payload.password = password;
+          const r = await apiFetch('/admin/deploy/ssh-run', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+          });
+          const ok = r.ok !== false;
+          if (stepStatus) { stepStatus.textContent = ok ? '✓ Done' : '✗ Failed'; stepStatus.style.color = ok ? 'var(--success,#2d8a4e)' : 'var(--danger,#c0392b)'; }
+          if (ok && stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
+          showLog(logSetup, ok, `Step ${currentStep + 1} ${ok ? 'complete' : 'failed'}`, r.output || r.stdout || r.stderr || '');
+        } catch (err) {
+          if (stepStatus) { stepStatus.textContent = '✗ Failed'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
+          showLog(logSetup, false, err.message);
+        } finally {
+          carouselRun.disabled = false;
+        }
+      });
+    }
+
+    // ── Server command tiles ──
+    document.querySelectorAll('.rs-cmd-tile').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const command = btn.dataset.cmd;
+        btn.disabled  = true;
+        showLog(logCmds, null, 'Running…');
+        try {
+          const r = await apiFetch('/admin/deploy/ssh-run', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ command }),
+          });
+          const ok = r.ok !== false;
+          const label = command.replace(/_/g, ' ');
+          showLog(logCmds, ok, `${label} ${ok ? 'complete' : 'failed'}`, r.output || r.stdout || r.stderr || '');
+        } catch (err) {
+          showLog(logCmds, false, err.message);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // ── Manage password (change server admin password) ──
+    const rsManagePwBtn = document.getElementById('rs-manage-pw-btn');
+    if (rsManagePwBtn) {
+      rsManagePwBtn.addEventListener('click', async () => {
+        const pwInput = document.getElementById('rs-manage-password');
+        const pw = pwInput ? pwInput.value : '';
+        if (!pw || pw.length < 10) {
+          showLog(logCmds, false, 'Password must be at least 10 characters.');
+          return;
+        }
+        rsManagePwBtn.disabled = true;
+        showLog(logCmds, null, 'Changing server password…');
+        try {
+          const r = await apiFetch('/admin/deploy/ssh-run', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ command: 'manage_password', password: pw }),
+          });
+          const ok = r.ok !== false;
+          showLog(logCmds, ok, ok ? 'Server password changed and site restarted.' : 'Failed to change password.', r.output || r.stdout || r.stderr || '');
+          if (ok && pwInput) pwInput.value = '';
+        } catch (err) {
+          showLog(logCmds, false, err.message);
+        } finally {
+          rsManagePwBtn.disabled = false;
+        }
+      });
+    }
+
+    // ── Push / Pull ──
+    async function runSync(direction, label) {
+      const btn = document.getElementById(`rs-${direction}-btn`);
+      if (btn) btn.disabled = true;
+      showLog(logSync, null, `${label}…`);
+      try {
+        const r = await apiFetch('/admin/deploy/sync', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ direction }),
+        });
+        const summary = r.results
+          ? r.results.map(x => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ')
+          : 'done';
+        const stdout = r.results
+          ? r.results.map(x => `[${x.label}]\n${(x.stdout||'').trim()}${x.stderr?'\n'+x.stderr:''}`).join('\n\n')
+          : '';
+        showLog(logSync, r.ok !== false, `${label}: ${summary}`, stdout);
+      } catch (err) {
+        showLog(logSync, false, err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    const rsPushBtn = document.getElementById('rs-push-btn');
+    const rsPullBtn = document.getElementById('rs-pull-btn');
+    if (rsPushBtn) rsPushBtn.addEventListener('click', () => runSync('push', 'Push to server'));
+    if (rsPullBtn) rsPullBtn.addEventListener('click', () => runSync('pull', 'Pull from server'));
+
+    // ── Compare ──
+    const rsCompareResult = document.getElementById('rs-compare-result');
+
+    async function runCompare() {
+      if (!rsCompareResult) return;
+      rsCompareResult.innerHTML = '<p class="rs-diff-clean" style="color:var(--muted)">Comparing…</p>';
+      try {
+        const r = await apiFetch('/admin/deploy/compare', { method: 'POST' });
+        if (!r.ok || r.error) {
+          rsCompareResult.innerHTML = `<p class="rs-diff-clean" style="color:#c0392b">&#x2717; ${escHtml(r.error || 'Compare failed')}</p>`;
+          return;
+        }
+        if (!r.items || r.items.length === 0) {
+          rsCompareResult.innerHTML = '<p class="rs-diff-clean">&#x2713; Everything is in sync.</p>';
+        } else {
+          let html = `<p class="rs-diff-header">${r.items.length} item${r.items.length === 1 ? '' : 's'} out of sync:</p>`;
+          for (const item of r.items) {
+            const dir = item.direction || 'both';
+            let actions = '';
+            if (dir === 'push') {
+              actions = `<button class="btn btn-primary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push to server</button>`;
+            } else if (dir === 'pull') {
+              actions = `<button class="btn btn-primary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull from server</button>`;
+            } else {
+              actions = `<button class="btn btn-secondary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push</button>
+                         <button class="btn btn-secondary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull</button>`;
+            }
+            html += `<div class="rs-diff-item">
+              <div class="rs-diff-item-info">
+                <div class="rs-diff-item-label">${escHtml(item.label)}</div>
+                ${item.hint ? `<div class="rs-diff-item-hint">${escHtml(item.hint)}</div>` : ''}
+              </div>
+              <div class="rs-diff-actions">${actions}</div>
+            </div>`;
+          }
+          rsCompareResult.innerHTML = html;
+          rsCompareResult.querySelectorAll('.rs-diff-push, .rs-diff-pull').forEach(b => {
+            b.addEventListener('click', async () => {
+              const itemId    = b.dataset.itemId;
+              const direction = b.classList.contains('rs-diff-push') ? 'push' : 'pull';
+              b.disabled = true;
+              try {
+                const r2 = await apiFetch('/admin/deploy/sync-item', {
+                  method:  'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body:    JSON.stringify({ itemId, direction }),
+                });
+                b.closest('.rs-diff-item').style.opacity = '0.45';
+                b.innerHTML = r2.ok !== false ? (direction === 'push' ? '&#x2191; Pushed' : '&#x2193; Pulled') : '&#x2717; Failed';
+              } catch (err) {
+                b.textContent = '&#x2717; Error';
+              }
+            });
+          });
+        }
+      } catch (err) {
+        if (rsCompareResult) rsCompareResult.innerHTML = `<p class="rs-diff-clean" style="color:#c0392b">&#x2717; ${escHtml(err.message)}</p>`;
+      }
+    }
+
+    const comparePanel   = document.querySelector('.rs-sync-panel[data-panel="compare"]');
+    const compareRefresh = document.getElementById('rs-compare-refresh');
+    if (comparePanel)   comparePanel.addEventListener('toggle', () => { if (comparePanel.open) runCompare(); });
+    if (compareRefresh) compareRefresh.addEventListener('click', runCompare);
+
+    // ── SSH Key Setup ──
+    const sshKeyDetails = document.getElementById('rs-ssh-key-details');
+    let sshKeyLoaded = false;
+    if (sshKeyDetails) {
+      sshKeyDetails.addEventListener('toggle', async () => {
+        if (!sshKeyDetails.open || sshKeyLoaded) return;
+        sshKeyLoaded = true;
+        const status  = document.getElementById('rs-ssh-key-status');
+        const content = document.getElementById('rs-ssh-key-content');
+        const errDiv  = document.getElementById('rs-ssh-key-error');
+        try {
+          const r = await apiFetch('/admin/deploy/local-pubkey', { method: 'GET' });
+          if (!r.ok || !r.key) throw new Error(r.error || 'Could not retrieve key.');
+          const key     = r.key;
+          const authCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh\necho "${key}" >> ~/.ssh/authorized_keys\nchmod 600 ~/.ssh/authorized_keys`;
+          document.getElementById('rs-ssh-pubkey-display').textContent = key;
+          document.getElementById('rs-ssh-auth-cmd').textContent       = authCmd;
+          if (r.generated) {
+            status.textContent = 'No existing key was found — a new ed25519 key was generated for you.';
+          } else {
+            status.style.display = 'none';
+          }
+          content.style.display = '';
+          document.getElementById('rs-copy-pubkey').addEventListener('click', () => {
+            navigator.clipboard.writeText(key).then(() => {
+              document.getElementById('rs-copy-pubkey').textContent = 'Copied!';
+              setTimeout(() => { document.getElementById('rs-copy-pubkey').textContent = 'Copy'; }, 2000);
+            });
+          });
+          document.getElementById('rs-copy-authcmd').addEventListener('click', () => {
+            navigator.clipboard.writeText(authCmd).then(() => {
+              document.getElementById('rs-copy-authcmd').textContent = 'Copied!';
+              setTimeout(() => { document.getElementById('rs-copy-authcmd').textContent = 'Copy'; }, 2000);
+            });
+          });
+        } catch (err) {
+          status.style.display = 'none';
+          errDiv.textContent   = '✗ ' + err.message;
+          errDiv.style.display = '';
+        }
+      });
+    }
+
+    // ── Backups ──
+    const rsBackupBtn  = document.getElementById('rs-backup-btn');
+    const rsBackupList = document.getElementById('rs-backup-list');
+
+    async function loadBackups() {
+      if (!rsBackupList) return;
+      try {
+        const r = await apiFetch('/admin/deploy/backups', { method: 'GET' });
+        if (!r.backups || r.backups.length === 0) {
+          rsBackupList.innerHTML = '<p class="rs-backup-empty">No local backups yet.</p>';
+          return;
+        }
+        let html = '';
+        for (const b of r.backups) {
+          html += `<div class="rs-backup-item">
+            <div class="rs-backup-date">
+              <div class="rs-backup-label">${escHtml(b.label)}</div>
+              <div class="rs-backup-meta">${escHtml(b.contents)}</div>
+            </div>
+            <button class="btn btn-secondary btn-sm rs-backup-push" data-path="${escHtml(b.path)}">&#x2191; Push to server</button>
+          </div>`;
+        }
+        rsBackupList.innerHTML = html;
+        rsBackupList.querySelectorAll('.rs-backup-push').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            btn.disabled    = true;
+            btn.textContent = 'Pushing…';
+            try {
+              const r2 = await apiFetch('/admin/deploy/push-backup', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ path: btn.dataset.path }),
+              });
+              btn.textContent = r2.ok !== false ? '&#x2713; Done' : '&#x2717; Failed';
+            } catch (err) {
+              btn.textContent = '&#x2717; Error';
+            } finally {
+              setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#x2191; Push to server'; }, 2200);
+            }
+          });
+        });
+      } catch (err) {
+        if (rsBackupList) rsBackupList.innerHTML = `<p class="rs-backup-empty" style="color:#c0392b">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    // Load backup list when panel opens
+    const backupPanel = document.querySelector('.rs-sync-panel[data-panel="backup"]');
+    if (backupPanel) backupPanel.addEventListener('toggle', () => { if (backupPanel.open) loadBackups(); });
+
+    if (rsBackupBtn) rsBackupBtn.addEventListener('click', async () => {
+      rsBackupBtn.disabled    = true;
+      rsBackupBtn.textContent = 'Downloading…';
+      try {
+        const r = await apiFetch('/admin/deploy/backup', { method: 'POST' });
+        rsBackupBtn.textContent = r.ok !== false ? '&#x2713; Downloaded' : '&#x2717; Failed';
+        loadBackups();
+      } catch (err) {
+        rsBackupBtn.textContent = '&#x2717; ' + err.message.slice(0, 28);
+      } finally {
+        rsBackupBtn.disabled = false;
+        setTimeout(() => { rsBackupBtn.innerHTML = 'Download backup from server'; }, 2500);
+      }
+    });
+
+    // ── Open SSH terminal ──
+    const rsOpenTermBtn = document.getElementById('rs-open-terminal');
+    if (rsOpenTermBtn) {
+      rsOpenTermBtn.addEventListener('click', async () => {
+        rsOpenTermBtn.disabled = true;
+        showLog(logCmds, null, 'Opening terminal…');
+        try {
+          await apiFetch('/admin/deploy/open-terminal', { method: 'POST' });
+          showLog(logCmds, true, 'SSH terminal opened in your system terminal app.');
+        } catch (err) {
+          showLog(logCmds, false, err.message);
+        } finally {
+          rsOpenTermBtn.disabled = false;
+        }
+      });
+    }
+
+    // ── Copy SSH command ──
+    const rsCopyBtn = document.getElementById('rs-copy-ssh');
+    if (rsCopyBtn) {
+      rsCopyBtn.addEventListener('click', () => {
+        const cmd = rsSshCmd?.textContent || '';
+        if (!cmd || cmd.startsWith('(')) return;
+        navigator.clipboard.writeText(cmd).then(() => {
+          rsCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { rsCopyBtn.textContent = 'Copy'; }, 1500);
+        });
+      });
+    }
+  })();
 
 })();

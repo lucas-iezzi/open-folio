@@ -8,7 +8,9 @@
   <div class="login-page">
     <div class="login-card">
 
-      <img class="login-logo" src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi">
+      <% if (typeof logoMarkSrc !== 'undefined' && logoMarkSrc) { %>
+      <img class="login-logo" src="<%= logoMarkSrc %>" alt="Logo">
+      <% } %>
 
       <h1 class="login-title">Admin Login</h1>
 

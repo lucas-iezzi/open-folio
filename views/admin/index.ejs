@@ -3,17 +3,49 @@
 <head>
   <%- include('partials/head') %>
   <title>Dashboard — Admin</title>
+  <style>
+    /* Provider cards */
+    .provider-card-list{display:grid;gap:1rem;margin-top:1rem}
+    @media(min-width:700px){.provider-card-list{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}}
+    .provider-card{border:1px solid var(--border);border-radius:8px;padding:1rem;background:var(--surface)}
+    .provider-card--active{border-color:#6366f1;box-shadow:0 0 0 2px #e0e7ff}
+    .provider-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.5rem}
+    .provider-card-name{font-weight:600;font-size:.95rem}
+    .provider-card-badges{display:flex;gap:.35rem;flex-wrap:wrap}
+    .prov-badge{font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
+    .prov-badge--active{background:#6366f1;color:#fff}
+    .prov-badge--set{background:#d1fae5;color:#065f46}
+    .prov-badge--unset{background:#f3f4f6;color:#9ca3af}
+    .provider-card-models{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.75rem}
+    .prov-model{font-size:.78rem;color:var(--muted)}
+    .provider-key-form{display:flex;gap:.5rem;margin-bottom:.35rem}
+    .provider-key-form .settings-key-input{flex:1;min-width:0}
+    .provider-switch-btn{margin-top:.4rem}
+    /* Logo upload */
+    .logo-upload-grid{display:grid;gap:1.25rem;margin-top:1rem}
+    @media(min-width:600px){.logo-upload-grid{grid-template-columns:1fr 1fr}}
+    .logo-upload-card{border:1px solid var(--border);border-radius:8px;padding:1rem;background:var(--surface)}
+    .logo-upload-label{font-weight:600;font-size:.9rem;margin-bottom:.5rem}
+    .logo-upload-hint{font-weight:400;color:var(--muted);font-size:.8rem}
+    .logo-preview-wrap{height:90px;display:flex;align-items:center;justify-content:center;background:var(--color-bg);border:1px solid var(--border);border-radius:6px;margin-bottom:.75rem;overflow:hidden}
+    .logo-preview-img{width:100%;height:64px;object-fit:contain;display:block}
+    .logo-preview-empty{font-size:.8rem;color:var(--muted)}
+    .logo-upload-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+    .logo-upload-feedback{font-size:.8rem;margin-top:.4rem;min-height:1.2em}
+    .btn-danger{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+    .btn-danger:hover{background:#fecaca}
+  </style>
 </head>
 <body>
 
   <nav class="admin-nav" role="navigation">
     <div class="admin-nav-inner">
       <a href="/admin/dashboard" class="admin-nav-brand-icon">
-        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <% if (logoSmallSrc) { %><img src="<%= logoSmallSrc %>" alt="Logo" draggable="false"><% } %>
         <span class="admin-nav-label">admin</span>
       </a>
       <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
-        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+        <% if (logoMarkSrc) { %><img src="<%= logoMarkSrc %>" alt="Logo" draggable="false"><% } %>
       </a>
       <div class="admin-nav-actions">
         <a href="/" class="admin-nav-link" target="_blank" rel="noopener noreferrer">View site ↗</a>
@@ -26,8 +58,10 @@
 
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button class="admin-tab is-active" role="tab" aria-selected="true"  aria-controls="tab-projects"  data-tab="projects">Portfolio</button>
+      <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-sandbox"   data-tab="sandbox">UI Sandbox</button>
       <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-activity"  data-tab="activity">Activity</button>
       <button class="admin-tab"           role="tab" aria-selected="false" aria-controls="tab-settings"  data-tab="settings">Settings</button>
+      <% if (isLocalAccess) { %><button class="admin-tab" role="tab" aria-selected="false" aria-controls="tab-deploy" data-tab="deploy">Remote Server</button><% } %>
     </div>
 
     <!-- ══ PROJECTS TAB ══════════════════════════════════════════════ -->
@@ -36,6 +70,15 @@
       <div class="admin-page-header">
         <h1 class="admin-page-title">Projects</h1>
         <div class="admin-page-header-actions">
+          <% if (isLocalAccess) { %>
+          <a href="/admin/export-html" class="btn btn-secondary" title="Download a single self-contained HTML file of your portfolio">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M7 2v7M4 6l3 3 3-3"/>
+              <path d="M2 11h10"/>
+            </svg>
+            Export as HTML
+          </a>
+          <% } %>
           <button type="button" id="import-btn" class="btn btn-secondary">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M1 7h7M5 4l3 3-3 3"/>
@@ -49,7 +92,12 @@
             </svg>
             Create Project
           </a>
+          <% const _dashHasAI = aiStatus.providers[aiStatus.active] && aiStatus.providers[aiStatus.active].hasKey; %>
+          <% if (_dashHasAI) { %>
           <a href="/admin/generate" class="btn btn-primary">✦ Generate Project</a>
+          <% } else { %>
+          <a href="/admin/dashboard#settings" class="btn btn-secondary" title="Add an AI API key in Settings to unlock AI-generated projects" style="opacity:0.6;">✦ Generate Project</a>
+          <% } %>
         </div>
       </div>
       <div id="import-status" style="font-size:13px; margin-bottom:12px;"></div>
@@ -135,6 +183,128 @@
       <% } %>
 
     </div><!-- /tab-projects -->
+
+    <!-- ══ UI SANDBOX TAB ═══════════════════════════════════════════ -->
+    <div class="admin-tab-panel" id="tab-sandbox" role="tabpanel">
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">UI Sandbox</h1>
+        <div class="admin-page-header-actions">
+          <a href="/sandbox" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Sandbox ↗</a>
+        </div>
+      </div>
+
+      <p style="font-size:14px; color:var(--muted); margin-bottom:28px; max-width:600px; line-height:1.6;">
+        Use the sandbox to experiment with layouts using plain-English AI prompts. Save configurations as named styles here, then activate one to apply it to the live site.
+      </p>
+
+      <!-- Saved styles list -->
+      <div style="margin-bottom:12px;">
+        <h2 style="font-size:14px; font-weight:600; margin:0;">Saved Styles</h2>
+      </div>
+
+      <div id="sb-styles-list" style="display:flex; flex-direction:column; gap:8px; min-height:48px;">
+        <div style="font-size:13px; color:var(--muted); padding:12px 0;" id="sb-styles-empty">Loading styles…</div>
+      </div>
+
+    </div><!-- /tab-sandbox -->
+
+    <script>
+    (function () {
+      const CSRF = '<%= csrfToken %>';
+
+      function sbJson(path, method, body) {
+        return fetch(path, {
+          method,
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+          body: body ? JSON.stringify(body) : undefined,
+        }).then(r => r.json());
+      }
+
+      async function loadStyles() {
+        const list = document.getElementById('sb-styles-list');
+        const empty = document.getElementById('sb-styles-empty');
+        try {
+          const { styles } = await fetch('/api/sandbox/styles').then(r => r.json());
+          if (empty) empty.remove();
+          list.innerHTML = '';
+
+          const anyActive = styles.some(function (s) { return s.is_active; });
+
+          // ── Default row — always shown at top ──
+          const defRow = document.createElement('div');
+          defRow.style.cssText = 'display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--card-bg,#f9fafb);border:1px solid var(--border,#e5e7eb);border-radius:8px;';
+          defRow.innerHTML =
+            '<span style="font-size:13px;font-weight:500;flex:1;">Default</span>' +
+            (!anyActive ? '<span style="font-size:11px;font-weight:600;background:#111;color:#fff;padding:2px 7px;border-radius:10px;flex-shrink:0;">LIVE</span>' : '') +
+            '<span style="font-size:11px;color:var(--muted);">Built-in</span>' +
+            '<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;"' + (!anyActive ? ' disabled' : '') + '>' + (!anyActive ? 'Active' : 'Activate on Site') + '</button>';
+          if (anyActive) {
+            defRow.querySelector('.btn-primary').addEventListener('click', async function () {
+              await sbJson('/admin/sandbox/styles/deactivate', 'POST');
+              loadStyles();
+            });
+          }
+          list.appendChild(defRow);
+
+          // ── Saved style rows ──
+          if (!styles.length) {
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:13px;color:var(--muted);padding:10px 0 4px;';
+            hint.textContent = 'No saved styles yet. Open the sandbox and use Save As to create one.';
+            list.appendChild(hint);
+            return;
+          }
+          styles.forEach(function (style) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--card-bg,#f9fafb);border:1px solid var(--border,#e5e7eb);border-radius:8px;';
+            row.innerHTML =
+              '<span style="font-size:13px;font-weight:500;flex:1;">' + escHtml(style.name) + '</span>' +
+              (style.is_active ? '<span style="font-size:11px;font-weight:600;background:#111;color:#fff;padding:2px 7px;border-radius:10px;flex-shrink:0;">LIVE</span>' : '') +
+              '<span style="font-size:11px;color:var(--muted);">' + new Date(style.updated_at).toLocaleDateString() + '</span>' +
+              '<a href="/sandbox?load_style=' + style.id + '" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:5px 10px;">Load in Sandbox</a>' +
+              '<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;" data-activate="' + style.id + '">' + (style.is_active ? 'Deactivate' : 'Activate on Site') + '</button>' +
+              '<button class="btn btn-secondary" style="font-size:12px;padding:5px 10px;color:#c0392b;" data-delete="' + style.id + '">Delete</button>';
+            row.querySelector('[data-activate]').addEventListener('click', async function () {
+              if (style.is_active) {
+                await sbJson('/admin/sandbox/styles/deactivate', 'POST');
+              } else {
+                await sbJson('/admin/sandbox/styles/' + style.id + '/activate', 'POST');
+              }
+              loadStyles();
+            });
+            row.querySelector('[data-delete]').addEventListener('click', async function () {
+              if (!confirm('Delete style "' + style.name + '"?')) return;
+              await fetch('/api/sandbox/styles/' + style.id, { method: 'DELETE' });
+              loadStyles();
+            });
+            list.appendChild(row);
+          });
+        } catch (e) {
+          list.innerHTML = '<div style="font-size:13px;color:#c0392b;">Failed to load styles.</div>';
+        }
+      }
+
+      function escHtml(str) {
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      }
+
+      // Load when sandbox tab is shown
+      document.addEventListener('DOMContentLoaded', function () {
+        const sandboxTabBtn = document.querySelector('[data-tab="sandbox"]');
+        if (sandboxTabBtn) {
+          sandboxTabBtn.addEventListener('click', function () {
+            setTimeout(loadStyles, 50);
+          });
+        }
+        // Also load if sandbox tab is active on page load
+        const sandboxPanel = document.getElementById('tab-sandbox');
+        if (sandboxPanel && sandboxPanel.classList.contains('is-active')) {
+          loadStyles();
+        }
+      });
+    })();
+    </script>
 
     <!-- ══ ACTIVITY TAB ══════════════════════════════════════════════ -->
     <div class="admin-tab-panel" id="tab-activity" role="tabpanel">
@@ -255,67 +425,628 @@
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">API Keys</div>
-        <p class="settings-section-desc">Keys are written directly to the server's <code>.env</code> file and never returned to this page. The form shows only whether a key is currently set.</p>
+        <div class="settings-section-title">AI Provider</div>
+        <p class="settings-section-desc">
+          Keys are saved to the server's <code>.env</code> file and never shown back to you.
+          Saving a key automatically makes that provider active. To switch providers, either save a new key or click "Switch to this" if the key is already set.
+        </p>
 
-        <div class="settings-key-list">
-
-          <div class="settings-key-row">
-            <div class="settings-key-info">
-              <div class="settings-key-name">Anthropic (Claude)</div>
-              <div class="settings-key-status">
-                <% if (apiKeyStatus.ANTHROPIC_API_KEY) { %>
-                  <span class="settings-badge settings-badge--set">Key set</span>
+        <div class="provider-card-list">
+          <% Object.entries(providers).forEach(([pid, prov]) => { %>
+          <%   const pStatus = aiStatus.providers[pid]; %>
+          <div class="provider-card<%= pStatus.isActive ? ' provider-card--active' : '' %>">
+            <div class="provider-card-top">
+              <div class="provider-card-name"><%= prov.name %></div>
+              <div class="provider-card-badges">
+                <% if (pStatus.isActive) { %><span class="prov-badge prov-badge--active">Active</span><% } %>
+                <% if (pStatus.hasKey) { %>
+                  <span class="prov-badge prov-badge--set">Key set</span>
                 <% } else { %>
-                  <span class="settings-badge settings-badge--unset">Not set</span>
+                  <span class="prov-badge prov-badge--unset">No key</span>
                 <% } %>
               </div>
             </div>
-            <form class="settings-key-form" data-key="ANTHROPIC_API_KEY">
+            <div class="provider-card-models">
+              <span class="prov-model"><strong>Fast:</strong> <%= prov.models.fast.label %></span>
+              <span class="prov-model"><strong>Smart:</strong> <%= prov.models.smart.label %></span>
+              <span class="prov-model"><strong>Quality:</strong> <%= prov.models.quality.label %></span>
+            </div>
+            <form class="provider-key-form" data-key="<%= prov.keyEnv %>" data-provider="<%= pid %>">
               <input
                 type="password"
                 class="settings-key-input"
-                placeholder="sk-ant-…"
+                placeholder="<%= prov.keyHint %>"
                 autocomplete="new-password"
                 spellcheck="false"
-                aria-label="Anthropic API key">
-              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+                aria-label="<%= prov.name %> API key">
+              <button type="submit" class="btn btn-primary btn-sm">Save &amp; Activate</button>
             </form>
             <div class="settings-key-feedback" aria-live="polite"></div>
+            <% if (pStatus.hasKey && !pStatus.isActive) { %>
+              <button class="btn btn-secondary btn-sm provider-switch-btn" data-provider="<%= pid %>">Switch to this provider</button>
+            <% } %>
+          </div>
+          <% }); %>
+        </div>
+      </div>
+
+      <div class="settings-section" style="margin-top:2rem">
+        <div class="settings-section-title">Site Identity</div>
+        <p class="settings-section-desc">Your name and tagline shown on the public portfolio homepage. The <strong>UI Sandbox</strong> can override these for design experiments — changes here persist as the base values.</p>
+        <form id="site-identity-form" style="display:grid;gap:1rem;max-width:520px;margin-top:1rem">
+          <div>
+            <label for="site-name-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Name <span style="font-weight:400;color:var(--muted);font-size:.8rem">(use a new line for a stacked two-line display)</span></label>
+            <textarea id="site-name-input" rows="2" style="width:100%;font-family:inherit;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;resize:vertical;background:var(--surface);color:var(--text);outline:none" maxlength="100"><%= siteName %></textarea>
+          </div>
+          <div>
+            <label for="site-tagline-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Tagline</label>
+            <textarea id="site-tagline-input" rows="3" style="width:100%;font-family:inherit;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;resize:vertical;background:var(--surface);color:var(--text);outline:none" maxlength="500"><%= siteTagline %></textarea>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem">
+            <button type="submit" class="btn btn-primary btn-sm">Save</button>
+            <span id="site-identity-feedback" style="font-size:.8rem;color:var(--muted)" aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+
+      <div class="settings-section" style="margin-top:2rem">
+        <div class="settings-section-title">Logos</div>
+        <p class="settings-section-desc">
+          Uploaded logos appear in the admin panel automatically. Use the <strong>UI Sandbox</strong> to control where each logo appears on the public site (nav or hero) and toggle visibility.
+        </p>
+        <div class="logo-upload-grid">
+
+          <div class="logo-upload-card">
+            <div class="logo-upload-label">Small Logo <span class="logo-upload-hint">(icon, nav use)</span></div>
+            <div class="logo-preview-wrap" id="logo-preview-small">
+              <% if (logoSmallSrc) { %>
+              <img src="<%= logoSmallSrc %>" alt="Small logo" class="logo-preview-img">
+              <% } else { %>
+              <div class="logo-preview-empty">No image</div>
+              <% } %>
+            </div>
+            <div class="logo-upload-actions">
+              <label class="btn btn-secondary btn-sm logo-file-label">
+                Choose file
+                <input type="file" class="logo-file-input" data-type="small" accept="image/*" style="display:none">
+              </label>
+              <% if (logoSmallSrc) { %>
+              <button class="btn btn-danger btn-sm logo-delete-btn" data-type="small">Remove</button>
+              <% } %>
+            </div>
+            <div class="logo-upload-feedback" data-type="small" aria-live="polite"></div>
           </div>
 
-          <div class="settings-key-row">
-            <div class="settings-key-info">
-              <div class="settings-key-name">OpenAI <span class="settings-key-note">(coming soon)</span></div>
-              <div class="settings-key-status">
-                <% if (apiKeyStatus.OPENAI_API_KEY) { %>
-                  <span class="settings-badge settings-badge--set">Key set</span>
-                <% } else { %>
-                  <span class="settings-badge settings-badge--unset">Not set</span>
-                <% } %>
-              </div>
+          <div class="logo-upload-card">
+            <div class="logo-upload-label">Logomark <span class="logo-upload-hint">(larger mark, hero use)</span></div>
+            <div class="logo-preview-wrap" id="logo-preview-mark">
+              <% if (logoMarkSrc) { %>
+              <img src="<%= logoMarkSrc %>" alt="Logomark" class="logo-preview-img">
+              <% } else { %>
+              <div class="logo-preview-empty">No image</div>
+              <% } %>
             </div>
-            <form class="settings-key-form" data-key="OPENAI_API_KEY">
-              <input
-                type="password"
-                class="settings-key-input"
-                placeholder="sk-…"
-                autocomplete="new-password"
-                spellcheck="false"
-                aria-label="OpenAI API key"
-                disabled>
-              <button type="submit" class="btn btn-secondary btn-sm" disabled>Save</button>
-            </form>
-            <div class="settings-key-feedback" aria-live="polite"></div>
+            <div class="logo-upload-actions">
+              <label class="btn btn-secondary btn-sm logo-file-label">
+                Choose file
+                <input type="file" class="logo-file-input" data-type="mark" accept="image/*" style="display:none">
+              </label>
+              <% if (logoMarkSrc) { %>
+              <button class="btn btn-danger btn-sm logo-delete-btn" data-type="mark">Remove</button>
+              <% } %>
+            </div>
+            <div class="logo-upload-feedback" data-type="mark" aria-live="polite"></div>
           </div>
 
         </div>
+
+        <div style="margin-top:1.5rem">
+          <div class="logo-upload-label" style="margin-bottom:.5rem">Nav Logo Size</div>
+          <div style="display:flex;align-items:center;gap:.75rem">
+            <span class="logo-upload-hint" style="white-space:nowrap">50%</span>
+            <input type="range" id="logo-size-slider" min="0" max="100" step="1"
+                   data-size="<%= logoNavSize %>"
+                   style="flex:1;accent-color:var(--text);cursor:pointer">
+            <span class="logo-upload-hint" style="white-space:nowrap">200%</span>
+            <span id="logo-size-value" style="font-size:.85rem;font-weight:600;min-width:3.5em;text-align:right;color:var(--text)"></span>
+          </div>
+          <div id="logo-size-feedback" style="font-size:.75rem;margin-top:.35rem;min-height:1.1em;color:var(--muted)"></div>
+        </div>
+
+      </div>
+
+      <div class="settings-section" style="margin-top:2rem">
+        <div class="settings-section-title">Admin Password</div>
+        <p class="settings-section-desc">Change the secret word used to log in to this admin panel. Takes effect immediately — no server restart needed.</p>
+        <form id="admin-password-form" style="display:grid;gap:1rem;max-width:420px;margin-top:1rem">
+          <div>
+            <label for="admin-pw-current" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Current password</label>
+            <input type="password" id="admin-pw-current" autocomplete="current-password"
+                   style="width:100%;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
+          </div>
+          <div>
+            <label for="admin-pw-new" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">
+              New password <span style="font-weight:400;color:var(--muted);font-size:.8rem">(min 10 characters)</span>
+            </label>
+            <input type="password" id="admin-pw-new" autocomplete="new-password"
+                   style="width:100%;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
+          </div>
+          <div>
+            <label for="admin-pw-confirm" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Confirm new password</label>
+            <input type="password" id="admin-pw-confirm" autocomplete="new-password"
+                   style="width:100%;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem">
+            <button type="submit" class="btn btn-primary btn-sm">Update password</button>
+            <span id="admin-password-feedback" style="font-size:.8rem;color:var(--muted)" aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+
+      <div class="settings-section" style="margin-top:2rem">
+        <div class="settings-section-title">Secret Access Word</div>
+        <p class="settings-section-desc">When set, the admin login page is hidden — it only appears when the secret word is included in the URL as <code>?token=yourword</code>. Leave blank to disable (login page is always visible). Takes effect immediately.</p>
+        <form id="access-token-form" style="display:grid;gap:1rem;max-width:420px;margin-top:1rem">
+          <div>
+            <label for="access-token-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">
+              Secret word <span style="font-weight:400;color:var(--muted);font-size:.8rem">(min 6 characters, or blank to disable)</span>
+            </label>
+            <input type="text" id="access-token-input" autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to disable"
+                   style="width:100%;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
+          </div>
+          <% if (hasAccessToken) { %>
+          <p style="font-size:.8rem;color:var(--muted);margin:0">Currently <strong style="color:var(--text)">enabled</strong>. Your admin login URL: <code>/admin/login?token=<span style="font-style:italic">your-word</span></code></p>
+          <% } else { %>
+          <p style="font-size:.8rem;color:var(--muted);margin:0">Currently <strong style="color:var(--text)">disabled</strong> — login page is publicly accessible.</p>
+          <% } %>
+          <div style="display:flex;align-items:center;gap:.75rem">
+            <button type="submit" class="btn btn-primary btn-sm">Save</button>
+            <span id="access-token-feedback" style="font-size:.8rem;color:var(--muted)" aria-live="polite"></span>
+          </div>
+        </form>
       </div>
 
     </div><!-- /tab-settings -->
 
+    <% if (isLocalAccess) { %>
+    <!-- ══ REMOTE SERVER TAB ════════════════════════════════════════ -->
+    <div class="admin-tab-panel" id="tab-deploy" role="tabpanel">
+
+      <div class="admin-page-header">
+        <h1 class="admin-page-title">Remote Server</h1>
+        <span style="font-size:13px;color:var(--muted);">Manage your live server — sync content, run commands, and keep things up to date</span>
+      </div>
+
+      <div class="rs-layout">
+        <div class="rs-main">
+
+          <!-- ── 1. Server Credentials ── -->
+          <details class="rs-card" id="rs-creds-card" open>
+            <summary class="rs-card-summary">
+              <span class="rs-conn-dot rs-conn-dot--unknown" id="rs-conn-dot"></span>
+              <span class="rs-card-title">Server Credentials</span>
+              <span id="rs-conn-host-label" class="rs-conn-host-label"><%= serverConfig.host ? serverConfig.host : 'Not configured' %></span>
+            </summary>
+            <div class="rs-card-body">
+              <p class="rs-card-desc">Saved locally to <code>.launcher-config.json</code> — never sent anywhere except your own server.</p>
+              <div class="rs-creds-grid">
+                <div class="rs-field">
+                  <label class="rs-label">Server IP / Hostname</label>
+                  <input id="rs-host" type="text" class="rs-input" placeholder="1.2.3.4 or mysite.com" value="<%= serverConfig.host || '' %>" spellcheck="false">
+                </div>
+                <div class="rs-field">
+                  <label class="rs-label">SSH Username</label>
+                  <input id="rs-user" type="text" class="rs-input" placeholder="root" value="<%= serverConfig.user || '' %>" spellcheck="false">
+                </div>
+                <div class="rs-field">
+                  <label class="rs-label">SSH Port</label>
+                  <input id="rs-port" type="number" class="rs-input" placeholder="22" min="1" max="65535" value="<%= serverConfig.sshPort || 22 %>" style="max-width:90px">
+                </div>
+                <div class="rs-field">
+                  <label class="rs-label">Remote Path</label>
+                  <input id="rs-rpath" type="text" class="rs-input" placeholder="~/open-folio" value="<%= serverConfig.remotePath || '' %>" spellcheck="false">
+                </div>
+              </div>
+              <div class="rs-card-actions">
+                <button id="rs-save-creds" class="btn btn-primary btn-sm">Save &amp; test connection</button>
+                <span id="rs-creds-feedback" class="rs-feedback" aria-live="polite"></span>
+              </div>
+
+              <details class="rs-inner-card" style="margin-top:1.5rem" id="rs-ssh-key-details">
+                <summary class="rs-inner-summary">SSH Key Setup</summary>
+                <div class="rs-inner-body">
+                  <p style="margin-bottom:.75rem">This tool connects using your local SSH key. Paste the command below into your server's console (or your provider's web SSH) to authorize this computer.</p>
+                  <div id="rs-ssh-key-status" style="color:var(--muted);font-size:.85rem">Loading your public key…</div>
+                  <div id="rs-ssh-key-content" style="display:none">
+                    <div style="margin-bottom:.5rem;font-size:.84rem;font-weight:600;color:var(--text)">Your public key:</div>
+                    <div style="position:relative">
+                      <pre class="rs-code" id="rs-ssh-pubkey-display" style="word-break:break-all;white-space:pre-wrap;padding-right:5rem"></pre>
+                      <button class="btn btn-secondary btn-sm" id="rs-copy-pubkey" style="position:absolute;top:.5rem;right:.5rem">Copy</button>
+                    </div>
+                    <div style="margin:1rem 0 .5rem;font-size:.84rem;font-weight:600;color:var(--text)">Run on your server to authorize this computer:</div>
+                    <div style="position:relative">
+                      <pre class="rs-code" id="rs-ssh-auth-cmd" style="word-break:break-all;white-space:pre-wrap;padding-right:5rem"></pre>
+                      <button class="btn btn-secondary btn-sm" id="rs-copy-authcmd" style="position:absolute;top:.5rem;right:.5rem">Copy</button>
+                    </div>
+                    <p style="font-size:.8rem;margin-top:.75rem;color:var(--muted)">Paste this into your VPS provider's web console, or an existing SSH session. After running it, click <em>Save &amp; test connection</em> above.</p>
+                  </div>
+                  <div id="rs-ssh-key-error" style="display:none;color:#c0392b;font-size:.85rem"></div>
+                </div>
+              </details>
+            </div>
+          </details>
+
+          <!-- ── 2. Server Setup (Carousel) ── -->
+          <details class="rs-card" id="rs-setup-card">
+            <summary class="rs-card-summary">
+              <span class="rs-card-title">Server Setup</span>
+              <span class="rs-card-subtitle">One-time — run these steps on a fresh server</span>
+            </summary>
+            <div class="rs-card-body rs-setup-body">
+              <div class="rs-dots" id="rs-dots">
+                <button class="rs-dot rs-dot--active" data-step="0"  title="Step 1"></button>
+                <button class="rs-dot" data-step="1"  title="Step 2"></button>
+                <button class="rs-dot" data-step="2"  title="Step 3"></button>
+                <button class="rs-dot" data-step="3"  title="Step 4"></button>
+                <button class="rs-dot" data-step="4"  title="Step 5"></button>
+                <button class="rs-dot" data-step="5"  title="Step 6"></button>
+                <button class="rs-dot" data-step="6"  title="Step 7"></button>
+                <button class="rs-dot" data-step="7"  title="Step 8"></button>
+                <button class="rs-dot" data-step="8"  title="Step 9"></button>
+                <button class="rs-dot" data-step="9"  title="Step 10"></button>
+                <button class="rs-dot" data-step="10" title="Step 11"></button>
+                <button class="rs-dot" data-step="11" title="Step 12"></button>
+              </div>
+
+              <div class="rs-step-panels">
+
+                <!-- Step 1: Get a VPS -->
+                <div class="rs-step-panel active" data-step="0">
+                  <div class="rs-sp-head"><span class="rs-step-num">1</span><span class="rs-sp-title">Get a VPS</span></div>
+                  <div class="rs-sp-body">
+                    <p>Sign up at <strong>Hetzner Cloud</strong>, <strong>DigitalOcean</strong>, or <strong>Vultr</strong> (~$4–7/mo). Choose <strong>Ubuntu 22.04 LTS</strong>, smallest plan (1 CPU, 1–2 GB RAM).</p>
+                    <p>Note your server's <strong>IP address</strong> — you'll need it throughout setup. When creating the server, <strong>add your SSH key</strong> (your provider will show you how — ask the AI assistant if you need help).</p>
+                    <p>In your provider's <strong>firewall or networking settings</strong>, make sure ports <strong>22</strong> (SSH), <strong>80</strong> (HTTP), and <strong>443</strong> (HTTPS) are open. The exact location varies by provider — Hetzner calls it "Firewalls", DigitalOcean calls it "Networking", Vultr calls it "Firewall". The next step also enables the server's software firewall.</p>
+                    <div class="rs-manual-note">⚠ Manual — complete this on your provider's website before continuing.</div>
+                  </div>
+                </div>
+
+                <!-- Step 2: Set up firewall (UFW) -->
+                <div class="rs-step-panel" data-step="1" data-cmd="ufw_setup">
+                  <div class="rs-sp-head"><span class="rs-step-num">2</span><span class="rs-sp-title">Set up firewall (UFW)</span></div>
+                  <div class="rs-sp-body">
+                    <p>Enables Ubuntu's built-in firewall and opens the required ports. Run this after confirming SSH credentials are saved and the connection test passes.</p>
+                    <pre class="rs-code">sudo ufw allow 22 && sudo ufw allow 80 && sudo ufw allow 443
+sudo ufw --force enable && sudo ufw status</pre>
+                  </div>
+                </div>
+
+                <!-- Step 3: Update packages -->
+                <div class="rs-step-panel" data-step="2" data-cmd="apt_update">
+                  <div class="rs-sp-head"><span class="rs-step-num">3</span><span class="rs-sp-title">Update packages</span></div>
+                  <div class="rs-sp-body">
+                    <p>Update and upgrade system packages on the server. This may take a minute.</p>
+                    <pre class="rs-code">sudo apt-get update && sudo apt-get upgrade -y</pre>
+                  </div>
+                </div>
+
+                <!-- Step 4: Install Node.js -->
+                <div class="rs-step-panel" data-step="3" data-cmd="node_install">
+                  <div class="rs-sp-head"><span class="rs-step-num">4</span><span class="rs-sp-title">Install Node.js 22</span></div>
+                  <div class="rs-sp-body">
+                    <p>Install Node.js 22 from the official NodeSource repository.</p>
+                    <pre class="rs-code">curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs && node --version</pre>
+                  </div>
+                </div>
+
+                <!-- Step 5: Install PM2 -->
+                <div class="rs-step-panel" data-step="4" data-cmd="pm2_install">
+                  <div class="rs-sp-head"><span class="rs-step-num">5</span><span class="rs-sp-title">Install PM2</span></div>
+                  <div class="rs-sp-body">
+                    <p>PM2 keeps your site running in the background and restarts it automatically on reboot.</p>
+                    <pre class="rs-code">sudo npm install -g pm2</pre>
+                  </div>
+                </div>
+
+                <!-- Step 6: Install Caddy -->
+                <div class="rs-step-panel" data-step="5" data-cmd="caddy_install">
+                  <div class="rs-sp-head"><span class="rs-step-num">6</span><span class="rs-sp-title">Install Caddy (web server)</span></div>
+                  <div class="rs-sp-body">
+                    <p>Caddy is the web server that handles your domain name and gets an HTTPS certificate automatically. Click <strong>Run on server</strong> to install it.</p>
+                    <pre class="rs-code">sudo apt install -y caddy
+sudo systemctl enable caddy && sudo systemctl start caddy</pre>
+                  </div>
+                </div>
+
+                <!-- Step 7: Clone repo -->
+                <div class="rs-step-panel" data-step="6" data-cmd="git_clone">
+                  <div class="rs-sp-head"><span class="rs-step-num">7</span><span class="rs-sp-title">Clone your repository</span></div>
+                  <div class="rs-sp-body">
+                    <p>Click <strong>Run on server</strong> to clone the open-folio repository to the remote path set in Server Credentials.</p>
+                    <p style="margin-top:.5rem;font-size:.85rem;color:var(--muted)">Cloning from: <code>https://github.com/lucas-iezzi/open-folio</code></p>
+                  </div>
+                </div>
+
+                <!-- Step 8: npm install -->
+                <div class="rs-step-panel" data-step="7" data-cmd="npm_install">
+                  <div class="rs-sp-head"><span class="rs-step-num">8</span><span class="rs-sp-title">Install dependencies</span></div>
+                  <div class="rs-sp-body">
+                    <p>Install Node.js packages on the server (production only — no dev tools).</p>
+                    <pre class="rs-code">npm install --omit=dev</pre>
+                  </div>
+                </div>
+
+                <!-- Step 9: First-time setup -->
+                <div class="rs-step-panel" data-step="8" data-cmd="server_setup" data-needs-password="true">
+                  <div class="rs-sp-head"><span class="rs-step-num">9</span><span class="rs-sp-title">First-time server setup</span></div>
+                  <div class="rs-sp-body">
+                    <p>Creates the <code>.env</code> file on the server with your chosen admin password. Enter the password you want to use to log into the admin panel.</p>
+                    <div class="rs-field" style="margin-top:.75rem;max-width:320px">
+                      <label class="rs-label">Admin password (min 10 characters)</label>
+                      <input id="rs-setup-password" type="password" class="rs-input" placeholder="Choose a strong password" autocomplete="new-password">
+                    </div>
+                    <p style="margin-top:.6rem;font-size:.82rem;color:var(--muted)">This also runs on the server via SSH — or run manually: <code>node scripts/setup.js</code></p>
+                  </div>
+                </div>
+
+                <!-- Step 10: Start with PM2 -->
+                <div class="rs-step-panel" data-step="9" data-cmd="pm2_start">
+                  <div class="rs-sp-head"><span class="rs-step-num">10</span><span class="rs-sp-title">Start the site with PM2</span></div>
+                  <div class="rs-sp-body">
+                    <pre class="rs-code">pm2 start ecosystem.config.js --env production
+pm2 save && pm2 startup</pre>
+                    <p>After starting, push your local content using Content Sync.</p>
+                  </div>
+                </div>
+
+                <!-- Step 11: Configure Caddy with domain -->
+                <div class="rs-step-panel" data-step="10" data-cmd="caddy_configure" data-needs-domain="true">
+                  <div class="rs-sp-head"><span class="rs-step-num">11</span><span class="rs-sp-title">Configure Caddy with your domain</span></div>
+                  <div class="rs-sp-body">
+                    <p>Enter your domain name below. Clicking <strong>Run on server</strong> will write the Caddy config and reload the web server. Caddy will automatically fetch an HTTPS certificate once DNS is pointing to your server.</p>
+                    <div class="rs-field" style="margin-top:.75rem;max-width:360px">
+                      <label class="rs-label">Your domain</label>
+                      <input id="rs-domain-input" type="text" class="rs-input" placeholder="yourdomain.com" spellcheck="false">
+                    </div>
+                    <p style="margin-top:.75rem;font-size:.8rem">Do not include <code>https://</code> — just the bare domain (e.g. <code>myportfolio.com</code>). You can also use a subdomain like <code>www.myportfolio.com</code>.</p>
+                  </div>
+                </div>
+
+                <!-- Step 12: Point DNS -->
+                <div class="rs-step-panel" data-step="11">
+                  <div class="rs-sp-head"><span class="rs-step-num">12</span><span class="rs-sp-title">Point your domain to the server</span></div>
+                  <div class="rs-sp-body">
+                    <p>In your domain registrar's DNS settings, add an <strong>A record</strong>:</p>
+                    <pre class="rs-code">Type:  A
+Name:  @  (or blank — means root domain)
+Value: YOUR_SERVER_IP
+TTL:   Auto or 3600</pre>
+                    <p>Optionally add a second A record for <strong>www</strong> pointing to the same IP.</p>
+                    <p>DNS propagation takes <strong>5–30 minutes</strong>. Once it resolves, Caddy automatically obtains your HTTPS certificate — your site will be live at <code>https://yourdomain.com</code>.</p>
+                    <div class="rs-manual-note">⚠ Manual — done at your domain registrar's website (Namecheap, Cloudflare, etc.).</div>
+                  </div>
+                </div>
+
+              </div><!-- /rs-step-panels -->
+
+              <div class="rs-carousel-nav">
+                <button id="rs-prev-step" class="btn btn-secondary btn-sm" disabled>← Previous</button>
+                <button id="rs-carousel-run" class="btn btn-primary btn-sm" style="display:none">Run on server</button>
+                <span id="rs-step-status" class="rs-run-status"></span>
+                <button id="rs-next-step" class="btn btn-secondary btn-sm">Next →</button>
+              </div>
+              <div class="rs-log" id="rs-log-setup" aria-live="polite"></div>
+
+            </div>
+          </details>
+
+          <!-- ── 3. Content Sync ── -->
+          <details class="rs-card">
+            <summary class="rs-card-summary">
+              <span class="rs-card-title">Content Sync</span>
+              <span class="rs-card-subtitle">Push and pull database, images, and styles</span>
+            </summary>
+            <div class="rs-card-body">
+              <div class="rs-sync-row">
+                <div class="rs-sync-tile">
+                  <div class="rs-sync-arrow">↑</div>
+                  <div class="rs-sync-name">Push local → server</div>
+                  <div class="rs-sync-desc">Upload database, images, and styles to the live server</div>
+                  <button id="rs-push-btn" class="btn btn-primary btn-sm">Push to server</button>
+                </div>
+                <div class="rs-sync-tile">
+                  <div class="rs-sync-arrow">↓</div>
+                  <div class="rs-sync-name">Pull server → local</div>
+                  <div class="rs-sync-desc">Download database and images from server to this machine</div>
+                  <button id="rs-pull-btn" class="btn btn-secondary btn-sm">Pull from server</button>
+                </div>
+              </div>
+              <div class="rs-log" id="rs-log-sync" aria-live="polite"></div>
+
+              <details class="rs-sync-panel" data-panel="compare">
+                <summary class="rs-sync-panel-head">
+                  <span class="rs-sync-icon">⇄</span>
+                  <div class="rs-sync-panel-info">
+                    <span class="rs-sync-panel-title">Compare content</span>
+                    <span class="rs-sync-panel-hint">See what differs between local and server — no changes made</span>
+                  </div>
+                </summary>
+                <div class="rs-sync-panel-body">
+                  <div style="display:flex;justify-content:flex-end;margin-bottom:.4rem">
+                    <button id="rs-compare-refresh" class="btn btn-secondary btn-sm">↺ Refresh</button>
+                  </div>
+                  <div id="rs-compare-result"></div>
+                </div>
+              </details>
+
+              <details class="rs-sync-panel" data-panel="backup">
+                <summary class="rs-sync-panel-head">
+                  <span class="rs-sync-icon">⊞</span>
+                  <div class="rs-sync-panel-info">
+                    <span class="rs-sync-panel-title">Backups</span>
+                    <span class="rs-sync-panel-hint">Download from server or restore a previous backup</span>
+                  </div>
+                </summary>
+                <div class="rs-sync-panel-body">
+                  <div><button id="rs-backup-btn" class="btn btn-secondary btn-sm">Download backup from server</button></div>
+                  <div id="rs-backup-list"></div>
+                </div>
+              </details>
+            </div>
+          </details>
+
+          <!-- ── 4. Server Commands ── -->
+          <details class="rs-card">
+            <summary class="rs-card-summary">
+              <span class="rs-card-title">Server Commands</span>
+              <span class="rs-card-subtitle">Restart, view logs, and update your live site</span>
+            </summary>
+            <div class="rs-card-body">
+              <div class="rs-cmd-grid">
+                <button class="rs-cmd-tile" data-cmd="restart">
+                  <span class="rs-cmd-label">Restart site</span>
+                  <span class="rs-cmd-hint">Restarts the Node.js process via PM2</span>
+                </button>
+                <button class="rs-cmd-tile" data-cmd="logs">
+                  <span class="rs-cmd-label">View logs</span>
+                  <span class="rs-cmd-hint">Last 80 lines of PM2 output</span>
+                </button>
+                <button class="rs-cmd-tile" data-cmd="status">
+                  <span class="rs-cmd-label">Server status</span>
+                  <span class="rs-cmd-hint">PM2 status, disk usage, and uptime</span>
+                </button>
+                <button class="rs-cmd-tile" data-cmd="git_pull">
+                  <span class="rs-cmd-label">Pull code updates</span>
+                  <span class="rs-cmd-hint">git pull → npm install → pm2 restart</span>
+                </button>
+              </div>
+              <div class="rs-manage-row">
+                <span class="rs-manage-label">Change server admin password</span>
+                <div class="rs-manage-inner">
+                  <input id="rs-manage-password" type="password" class="rs-input rs-input--sm" placeholder="New password (min 10 chars)" autocomplete="new-password">
+                  <button id="rs-manage-pw-btn" class="btn btn-secondary btn-sm" data-cmd="manage_password" data-needs-password="manage">Change</button>
+                </div>
+              </div>
+              <div class="rs-ssh-row">
+                <div class="rs-ssh-label-bar">SSH TERMINAL</div>
+                <div class="rs-ssh-inner">
+                  <code id="rs-ssh-cmd" class="rs-ssh-cmd"></code>
+                  <button id="rs-open-terminal" class="btn btn-primary btn-sm" style="flex-shrink:0">Open terminal</button>
+                  <button id="rs-copy-ssh" class="btn btn-secondary btn-sm" style="flex-shrink:0">Copy</button>
+                </div>
+              </div>
+              <div class="rs-log" id="rs-log-cmds" aria-live="polite"></div>
+            </div>
+          </details>
+
+        </div><!-- /rs-main -->
+
+        <div class="rs-sidebar">
+          <!-- AI Deployment Assistant -->
+          <% const _deployHasAI = aiStatus.providers[aiStatus.active] && aiStatus.providers[aiStatus.active].hasKey; %>
+          <div class="deploy-chat-card">
+            <div class="deploy-chat-header">
+              <div class="deploy-chat-header-title">✦ Deployment Assistant</div>
+              <div class="deploy-chat-header-sub"><% if (_deployHasAI) { %>Ask anything about your server<% } else { %>Add an AI key in Settings to enable<% } %></div>
+            </div>
+            <div class="deploy-chat-messages" id="deploy-chat-messages">
+              <% if (_deployHasAI) { %>
+              <div class="deploy-msg deploy-msg--ai">Hi! I can help with server setup, troubleshooting SSH, domain setup, or anything about running your portfolio live. What do you need?</div>
+              <% } else { %>
+              <div class="deploy-msg deploy-msg--ai" style="opacity:0.6;">AI chat is disabled. Go to the <strong>Settings tab</strong> and add an API key to enable the deployment assistant.</div>
+              <% } %>
+            </div>
+            <div class="deploy-chat-input-row">
+              <textarea id="deploy-chat-input" class="deploy-chat-input" placeholder="<%= _deployHasAI ? 'Ask a question…' : 'Add an API key in Settings to enable' %>" rows="1" maxlength="1000" <% if (!_deployHasAI) { %>disabled<% } %>></textarea>
+              <button id="deploy-chat-send" class="btn btn-primary" style="padding:8px 16px;flex-shrink:0;" <% if (!_deployHasAI) { %>disabled<% } %>>Send</button>
+            </div>
+          </div>
+        </div><!-- /rs-sidebar -->
+
+      </div><!-- /rs-layout -->
+
+    </div><!-- /tab-deploy -->
+    <% } %>
+
   </div>
 
-  <script src="/js/admin.js" defer></script>
+
+  <% if (isLocalAccess) { %>
+  <script>
+  (function () {
+    const DEPLOY_CSRF = '<%= csrfToken %>';
+    const deployHistory = [];
+    const chatMessages = document.getElementById('deploy-chat-messages');
+    const chatInput    = document.getElementById('deploy-chat-input');
+    const chatSend     = document.getElementById('deploy-chat-send');
+    if (!chatMessages || !chatInput || !chatSend) return;
+
+    function addDeployMsg(role, text) {
+      const div = document.createElement('div');
+      div.className = 'deploy-msg deploy-msg--' + (role === 'user' ? 'user' : 'ai');
+      div.textContent = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    }
+
+    async function sendDeployChat() {
+      const text = chatInput.value.trim();
+      if (!text || chatSend.disabled) return;
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      chatSend.disabled = true;
+      chatInput.disabled = true;
+
+      addDeployMsg('user', text);
+      deployHistory.push({ role: 'user', content: text });
+      const thinking = addDeployMsg('assistant', 'Thinking…');
+      thinking.classList.add('is-thinking');
+
+      try {
+        const res = await fetch('/api/admin/deploy-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': DEPLOY_CSRF },
+          body: JSON.stringify({ message: text, history: deployHistory.slice(-20) }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+        thinking.textContent = data.reply;
+        thinking.classList.remove('is-thinking');
+        deployHistory.push({ role: 'assistant', content: data.reply });
+      } catch (err) {
+        thinking.textContent = 'Error: ' + err.message;
+        thinking.classList.remove('is-thinking');
+      } finally {
+        chatSend.disabled = false;
+        chatInput.disabled = false;
+        chatInput.focus();
+      }
+    }
+
+    chatSend.addEventListener('click', sendDeployChat);
+    chatInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDeployChat(); }
+    });
+    chatInput.addEventListener('input', function () {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 96) + 'px';
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+      const deployTabBtn = document.querySelector('[data-tab="deploy"]');
+      if (deployTabBtn) {
+        deployTabBtn.addEventListener('click', function () {
+          setTimeout(function () { if (chatInput) chatInput.focus(); }, 120);
+        });
+      }
+    });
+  })();
+  </script>
+  <% } %>
+
+  <script src="/js/admin.js?v=12" defer></script>
 </body>
 </html>

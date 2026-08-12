@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UI Sandbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Sandbox editor panel styles (no #sb-frame rules in this file) -->
+  <link rel="stylesheet" href="/css/sandbox.css?v=8">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0c0e; font-family: 'Montserrat', system-ui, sans-serif; }
+    /* #sb-frame sizing is handled entirely by the JS below — no CSS here to fight it */
+    #sb-editor { position: fixed; bottom: 12px; left: 16px; right: 16px; z-index: 9999; }
+    .sb-modal[hidden] { display: none; }
+    .sb-modal { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(6px); }
+  </style>
+</head>
+<body>
+
+  <iframe
+    id="sb-frame"
+    src="/sandbox/preview?sid=<%= sandboxSid %>"
+    data-sid="<%= sandboxSid %>"
+    title="Portfolio preview"
+  ></iframe>
+
+  <%# Script runs SYNCHRONOUSLY right after the iframe so getElementById finds it immediately.
+      No CSS in any stylesheet targets #sb-frame, so this inline style cannot be overridden. %>
+  <script>
+  // Style pre-loaded from admin "Load in Sandbox" — picked up by sandbox.js init()
+  window.__sbLoadStyleId   = <%- JSON.stringify(loadStyleId) %>;
+  window.__sbLoadStyleName = <%- JSON.stringify(loadStyleName) %>;
+
+  (function () {
+    var f = document.getElementById('sb-frame');
+
+    function size() {
+      var w = window.innerWidth;
+      var h = window.innerHeight;
+
+      // Set inline style — wins over all external CSS (no stylesheet has !important on #sb-frame)
+      f.style.cssText = [
+        'display:block',
+        'position:fixed',
+        'top:0',
+        'left:0',
+        'width:'  + w + 'px',
+        'height:' + h + 'px',
+        'border:none',
+        'margin:0',
+        'padding:0',
+        'z-index:1',
+        'background:#fff'
+      ].join(';');
+
+      // Belt-and-suspenders: also inject a <style> with pixel !important values.
+      // A JS-injected author !important rule beats anything from external stylesheets.
+      var id = 'sb-frame-size-override';
+      var el = document.getElementById(id) || document.createElement('style');
+      el.id = id;
+      el.textContent = '#sb-frame{display:block!important;position:fixed!important;top:0!important;left:0!important;width:' + w + 'px!important;height:' + h + 'px!important;border:none!important;margin:0!important;z-index:1!important;}';
+      if (!document.getElementById(id)) document.head.appendChild(el);
+    }
+
+    size();
+    window.addEventListener('resize', size);
+  }());
+  </script>
+
+  <div id="sb-editor">
+    <div class="sb-editor-top">
+      <div class="sb-editor-left">
+        <button id="sb-undo-btn"  class="sb-btn sb-btn-ghost" disabled>↩ Undo</button>
+        <button id="sb-redo-btn"  class="sb-btn sb-btn-ghost" disabled>Redo ↪</button>
+        <span class="sb-mode-badge">UI Sandbox</span>
+        <span id="sb-filename" class="sb-filename" title="Current style">Untitled</span>
+      </div>
+      <div id="sb-status" class="sb-status" aria-live="polite">Ready</div>
+      <div class="sb-editor-right">
+        <button id="sb-match-btn" class="sb-btn sb-btn-ghost<% if (!hasAI) { %> sb-btn-disabled<% } %>"
+          title="<%= hasAI ? 'Import style from a URL, screenshot, or Figma HTML export' : 'Add an AI API key in Admin → Settings to enable this feature' %>"
+          <% if (!hasAI) { %>aria-disabled="true"<% } %>>✦ Import Style</button>
+        <button id="sb-marker-btn" class="sb-btn sb-btn-ghost" title="Click an element on the preview to insert a named marker reference into your prompt">◎ Marker</button>
+        <button id="sb-save-btn"   class="sb-btn sb-btn-ghost">Save</button>
+        <button id="sb-saveas-btn" class="sb-btn sb-btn-ghost">Save As…</button>
+        <a id="sb-live-btn" href="/" class="sb-btn sb-btn-ghost" target="_blank" rel="noopener noreferrer">Live site ↗</a>
+        <button id="sb-reset-btn"  class="sb-btn sb-btn-ghost">Reset</button>
+      </div>
+    </div>
+    <div class="sb-editor-input-row">
+      <textarea
+        id="sb-prompt"
+        class="sb-prompt-input"
+        placeholder="<%= hasAI ? 'Describe a change… e.g. &quot;make the grid 3 columns&quot;, &quot;change the tagline text&quot;, or &quot;use a dark background&quot;' : 'AI prompt disabled — add an API key in Admin → Settings to enable' %>"
+        rows="1"
+        autocomplete="off"
+        spellcheck="false"
+        <% if (!hasAI) { %>disabled<% } %>
+      ></textarea>
+      <button id="sb-apply-btn" class="sb-btn sb-btn-primary<% if (!hasAI) { %> sb-btn-disabled<% } %>"
+        <% if (!hasAI) { %>aria-disabled="true"<% } %>>Apply</button>
+    </div>
+  </div>
+
+  <%# Save-as modal %>
+  <div id="sb-saveas-modal" class="sb-modal" hidden>
+    <div class="sb-modal-box">
+      <p class="sb-modal-title">Save style as</p>
+      <input id="sb-saveas-name" class="sb-modal-input" type="text" placeholder="e.g. Minimal Dark" maxlength="80" autocomplete="off">
+      <div class="sb-modal-actions">
+        <button id="sb-saveas-cancel"  class="sb-btn sb-btn-ghost">Cancel</button>
+        <button id="sb-saveas-confirm" class="sb-btn sb-btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <%# Import Style modal %>
+  <div id="sb-match-modal" class="sb-modal" hidden>
+    <div class="sb-modal-box sb-import-box">
+      <p class="sb-modal-title">Import Style</p>
+      <p class="sb-modal-desc">Add any combination — more inputs give better results. URL + image + HTML/CSS all work together.</p>
+
+      <div class="sb-import-section">
+        <label class="sb-import-label">🔗 Website URL <span class="sb-import-opt">(optional)</span></label>
+        <input id="sb-match-url" class="sb-modal-input" type="url" placeholder="https://example.com" autocomplete="off" spellcheck="false" style="margin-bottom:0">
+      </div>
+
+      <div class="sb-import-section">
+        <label class="sb-import-label">🖼 Screenshot or image <span class="sb-import-opt">(optional — Figma export, live site screenshot, etc.)</span></label>
+        <div id="sb-image-drop" class="sb-drop-zone" tabindex="0" role="button" aria-label="Upload image">
+          <span id="sb-image-drop-label">Drop image here or click to browse</span>
+          <input id="sb-image-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
+        </div>
+      </div>
+
+      <div class="sb-import-section">
+        <label class="sb-import-label">📄 HTML / CSS file <span class="sb-import-opt">(optional — Figma → Anima/Builder.io export, any .html or .css)</span></label>
+        <div id="sb-html-drop" class="sb-drop-zone" tabindex="0" role="button" aria-label="Upload HTML or CSS file">
+          <span id="sb-html-drop-label">Drop .html or .css file here or click to browse</span>
+          <input id="sb-html-input" type="file" accept=".html,.htm,.css,text/html,text/css" hidden>
+        </div>
+      </div>
+
+      <div class="sb-modal-actions" style="margin-top:20px">
+        <button id="sb-match-cancel"  class="sb-btn sb-btn-ghost">Cancel</button>
+        <button id="sb-match-confirm" class="sb-btn sb-btn-primary" disabled>Analyze &amp; Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <%# Marker pick overlay — shown above the iframe during pick mode %>
+  <div id="sb-marker-overlay" aria-hidden="true">
+    <div id="sb-marker-hint">Click any element on the preview to place a marker — <kbd>Esc</kbd> to cancel</div>
+  </div>
+
+  <%# Marker pins rendered here as position:fixed dots above the iframe %>
+  <div id="sb-marker-pins" aria-hidden="true"></div>
+
+  <script src="/js/sandbox.js?v=8" defer></script>
+</body>
+</html>

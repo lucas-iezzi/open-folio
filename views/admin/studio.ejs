@@ -22,11 +22,11 @@
   <nav class="admin-nav" role="navigation">
     <div class="admin-nav-inner">
       <a href="/admin/dashboard" class="admin-nav-brand-icon">
-        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <% if (typeof logoSmallSrc !== 'undefined' && logoSmallSrc) { %><img src="<%= logoSmallSrc %>" alt="Logo" draggable="false"><% } %>
         <span class="admin-nav-label">admin</span>
       </a>
       <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
-        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+        <% if (typeof logoMarkSrc !== 'undefined' && logoMarkSrc) { %><img src="<%= logoMarkSrc %>" alt="Logo" draggable="false"><% } %>
       </a>
       <% if (typeof mode !== 'undefined' && mode === 'edit') { %>
       <div class="admin-nav-actions studio-nav-actions">
@@ -78,16 +78,20 @@
         </div>
 
         <div class="form-card studio-generate-card">
+          <% if (!hasAI) { %>
+          <div class="studio-no-ai-notice">
+            AI features are disabled — <a href="/admin/dashboard#settings" style="color:inherit;font-weight:600;">add an API key in Settings</a> to generate projects.
+          </div>
+          <% } %>
           <div class="studio-generate-row">
             <div class="studio-model-inline">
               <label class="studio-inline-label" for="studio-model">Model</label>
-              <select id="studio-provider" class="studio-select" style="display:none"><option value="anthropic">Anthropic</option></select>
-              <select id="studio-model" class="studio-select">
-                <option value="claude-sonnet-4-6">Sonnet 4.6 — fast</option>
-                <option value="claude-opus-4-8">Opus 4.8 — quality</option>
+              <select id="studio-model" class="studio-select" <% if (!hasAI) { %>disabled<% } %>>
+                <option value="smart"><%= aiModels.smart.label %></option>
+                <option value="quality"><%= aiModels.quality.label %></option>
               </select>
             </div>
-            <button id="studio-generate-btn" class="btn btn-primary studio-generate-btn-inline">Generate Project</button>
+            <button id="studio-generate-btn" class="btn btn-primary studio-generate-btn-inline" <% if (!hasAI) { %>disabled title="Add an API key in Settings to enable"<% } %>>Generate Project</button>
           </div>
           <div id="studio-generate-status" class="studio-status" style="margin-top:10px;"></div>
         </div>
@@ -126,9 +130,9 @@
           <div class="studio-chat-history" id="studio-chat-history" aria-live="polite"></div>
           <div id="studio-chat-attachments" class="studio-chat-attachments" style="display:none;"></div>
           <div class="studio-chat-input-row">
-            <button id="studio-chat-attach-btn" class="studio-chat-attach-btn" title="Attach file" aria-label="Attach file">+</button>
-            <textarea id="studio-chat-input" class="studio-chat-input" placeholder="Ask Claude to change something…" rows="2"></textarea>
-            <button id="studio-chat-send" class="studio-chat-send-btn" aria-label="Send">↑</button>
+            <button id="studio-chat-attach-btn" class="studio-chat-attach-btn" title="Attach file" aria-label="Attach file" <% if (!hasAI) { %>disabled<% } %>>+</button>
+            <textarea id="studio-chat-input" class="studio-chat-input" placeholder="<%= hasAI ? 'Ask ' + aiProviderName + ' to change something…' : 'Add an AI API key in Settings to enable chat' %>" rows="2" <% if (!hasAI) { %>disabled<% } %>></textarea>
+            <button id="studio-chat-send" class="studio-chat-send-btn" aria-label="Send" <% if (!hasAI) { %>disabled<% } %>>↑</button>
           </div>
           <div id="studio-chat-status" class="studio-status" style="margin-top:4px;font-size:12px;"></div>
         </div>

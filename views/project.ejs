@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
   <%- include('partials/head') %>
+  <% if (typeof sandboxCss !== 'undefined' && sandboxCss) { %>
+  <style><%- sandboxCss %></style>
+  <% } else if (typeof hasSandboxStyle !== 'undefined' && hasSandboxStyle) { %>
+  <link rel="stylesheet" href="/sandbox-active.css?page=<%= project.slug %>">
+  <% } %>
   <title><%= project.title %> — Lucas Iezzi</title>
   <meta name="description" content="<%= project.subtitle || project.title %>">
 </head>

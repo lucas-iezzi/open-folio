@@ -1,0 +1,339 @@
+/* ================================================================
+   UI SANDBOX — sandbox.css
+   Editor panel overlay. Portfolio preview is an iframe using the
+   real site CSS — no portfolio styles live here.
+   ================================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0c0c0e;
+  font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+}
+
+/* ── Editor panel — floating pill ─────────────────────────────── */
+/* Position is set inline in sandbox.ejs so it can never fail to load */
+#sb-editor {
+  background: rgba(16, 16, 20, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 16px;
+  box-shadow:
+    0 -2px 0 0 rgba(255,255,255,0.04) inset,
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 2px 8px rgba(0, 0, 0, 0.4);
+  color: #e8e8e8;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* Top bar ─────────────────────────────────────────────────────── */
+.sb-editor-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px 5px;
+}
+
+.sb-editor-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sb-editor-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.sb-mode-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.28);
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.sb-status {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.38);
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Input row ───────────────────────────────────────────────────── */
+.sb-editor-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 5px 14px 13px;
+}
+
+.sb-prompt-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  color: #e8e8e8;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 12px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s;
+  min-height: 36px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+.sb-prompt-input::placeholder { color: rgba(255,255,255,0.22); }
+.sb-prompt-input:focus        { border-color: rgba(255,255,255,0.28); }
+.sb-prompt-input:disabled     { opacity: 0.45; cursor: not-allowed; }
+
+/* Buttons ─────────────────────────────────────────────────────── */
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.12s, opacity 0.12s, color 0.12s;
+  white-space: nowrap;
+  text-decoration: none;
+  line-height: 1.4;
+}
+.sb-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.sb-btn-disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
+
+.sb-btn-ghost {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.55);
+}
+.sb-btn-ghost:hover:not(:disabled) {
+  background: rgba(255,255,255,0.09);
+  color: #e8e8e8;
+}
+
+.sb-icon-btn { gap: 5px; }
+
+.sb-btn-primary {
+  background: #ffffff;
+  color: #0c0c0e;
+  font-weight: 600;
+  border-color: #ffffff;
+  padding: 7px 18px;
+}
+.sb-btn-primary:hover:not(:disabled) { background: #e4e4e4; border-color: #e4e4e4; }
+.sb-btn-primary:disabled             { opacity: 0.35; }
+.sb-btn-primary.is-loading {
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.12);
+  cursor: not-allowed;
+}
+
+/* ── Save-As modal ─────────────────────────────────────────────── */
+.sb-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+}
+.sb-modal[hidden] { display: none; }
+
+.sb-modal-box {
+  background: #1a1a1e;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 24px;
+  width: min(360px, calc(100vw - 40px));
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+.sb-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e8e8;
+  margin: 0 0 12px;
+}
+.sb-modal-input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 8px;
+  color: #e8e8e8;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+  margin-bottom: 16px;
+}
+.sb-modal-input:focus { border-color: rgba(255,255,255,0.3); }
+.sb-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.sb-modal-desc {
+  font-size: 12px;
+  color: rgba(255,255,255,0.40);
+  margin: -4px 0 14px;
+  line-height: 1.55;
+}
+
+/* ── Import Style modal ────────────────────────────────────────── */
+.sb-import-box { width: min(520px, calc(100vw - 40px)); }
+
+.sb-import-section { margin-bottom: 14px; }
+.sb-import-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.55);
+  margin-bottom: 6px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.sb-import-opt { font-weight: 400; text-transform: none; letter-spacing: 0; color: rgba(255,255,255,0.3); }
+
+.sb-drop-zone {
+  border: 1.5px dashed rgba(255,255,255,0.18);
+  border-radius: 8px;
+  padding: 13px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255,255,255,0.35);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+  user-select: none;
+  outline: none;
+}
+.sb-drop-zone:hover,
+.sb-drop-zone:focus { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.6); }
+.sb-drop-zone--drag { border-color: rgba(255,255,255,0.55); background: rgba(255,255,255,0.07); }
+.sb-drop-zone--has-file { border-color: #4ade80; border-style: solid; color: #4ade80; }
+
+/* ── Filename indicator ────────────────────────────────────────── */
+.sb-filename {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.38);
+  padding: 1px 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.10);
+  margin-left: 2px;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-filename.is-dirty { color: rgba(255, 210, 80, 0.8); }
+
+/* ── Marker pick overlay ───────────────────────────────────────── */
+#sb-marker-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  background: rgba(99, 102, 241, 0.07);
+}
+#sb-marker-overlay.is-picking { display: block; }
+
+#sb-marker-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16, 16, 20, 0.92);
+  color: #e8e8e8;
+  font-size: 12px;
+  font-family: 'Montserrat', system-ui, sans-serif;
+  padding: 7px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.10);
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+}
+#sb-marker-hint kbd {
+  background: rgba(255,255,255,0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+/* Marker button active (pick-mode) state */
+#sb-marker-btn.is-picking {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.55);
+  color: #a5b4fc;
+}
+
+/* ── Marker pins ───────────────────────────────────────────────── */
+#sb-marker-pins { pointer-events: none; }
+
+.sb-marker-pin {
+  position: fixed;
+  z-index: 6;
+  pointer-events: auto;
+  cursor: pointer;
+  /* anchor the bottom of the stem at the click point */
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* badge — plain circle, no number */
+.sb-marker-pin span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #6366f1;
+  color: #fff;
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  font-weight: 700;
+  border: 1.5px solid rgba(255,255,255,0.85);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  transition: background 0.12s;
+}
+.sb-marker-pin:hover span { background: #ef4444; }
+/* Show ✕ on hover so the remove affordance is obvious */
+.sb-marker-pin:hover span::after { content: '✕'; }
+
+/* stem line below the badge */
+.sb-marker-pin::after {
+  content: '';
+  width: 2px;
+  height: 8px;
+  background: #6366f1;
+  border-radius: 0 0 2px 2px;
+  opacity: 0.9;
+}

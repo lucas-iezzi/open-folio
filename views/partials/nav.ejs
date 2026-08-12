@@ -2,13 +2,19 @@
   <div class="container">
     <div class="nav-inner">
 
-      <a href="/" class="nav-brand-icon" aria-label="Home">
-        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
-      </a>
+      <%# Left: small logo slot (hidden by default, shown via sandbox CSS) %>
+      <div class="nav-logo-small">
+        <% if (typeof logoSmallSrc !== 'undefined' && logoSmallSrc) { %>
+        <a href="/" aria-label="Home"><img src="<%= logoSmallSrc %>" alt="Logo" draggable="false"></a>
+        <% } %>
+      </div>
 
-      <a href="/" class="nav-brand-wordmark" aria-label="Home">
-        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
-      </a>
+      <%# Center: logomark slot (hidden by default, shown via sandbox CSS) %>
+      <div class="nav-logo-mark">
+        <% if (typeof logoMarkSrc !== 'undefined' && logoMarkSrc) { %>
+        <a href="/" aria-label="Home"><img src="<%= logoMarkSrc %>" alt="Logomark" draggable="false"></a>
+        <% } %>
+      </div>
 
       <%# Right: desktop links + mobile hamburger %>
       <div class="nav-right">

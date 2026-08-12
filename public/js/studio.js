@@ -141,7 +141,6 @@ const uploadStatus        = $('studio-upload-status');
 const uploadStatusSidebar = $('studio-upload-status-sidebar');
 const tagSaveStatus       = $('studio-tag-save-status');
 const description         = $('studio-description');
-const provider            = $('studio-provider');
 const modelSel            = $('studio-model');
 const generateBtn         = $('studio-generate-btn');
 const generateStatus      = $('studio-generate-status');
@@ -562,8 +561,7 @@ if (generateBtn) generateBtn.addEventListener('click', async () => {
     return;
   }
 
-  state.provider = provider?.value || 'anthropic';
-  state.model    = modelSel?.value || 'claude-sonnet-4-6';
+  state.modelTier = modelSel?.value || 'smart';
 
   lockButtons(true);
   transitionToPostGen();
@@ -572,7 +570,7 @@ if (generateBtn) generateBtn.addEventListener('click', async () => {
 
   try {
     const data = await apiFetch('/admin/studio/generate', {
-      description: desc, provider: state.provider, model: state.model, tags: getTags(),
+      description: desc, modelTier: state.modelTier, tags: getTags(),
     });
     stopLoadingTimer();
     await refreshPreview();
@@ -639,8 +637,7 @@ async function sendChatMessage() {
       // Always send the full current page state — server injects it before every user message
       payload = {
         feedback:       msg,
-        provider:       state.provider,
-        model:          state.model,
+        modelTier:      state.modelTier || 'smart',
         currentProject,
         imageManifest:  state.uploadedFiles.map(f => ({
           filename: (f.permanentPath || f.previewSrc || f.filename || '').split('/').pop(),
@@ -652,8 +649,7 @@ async function sendChatMessage() {
     } else {
       payload = {
         feedback:       msg,
-        provider:       state.provider,
-        model:          state.model,
+        modelTier:      state.modelTier || 'smart',
         tags:           getTags(),
         currentProject: state.currentProject,
         editorImages:   state.uploadedFiles.filter(f => f.fromEditor),

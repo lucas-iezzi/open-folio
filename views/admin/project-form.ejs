@@ -10,11 +10,11 @@
   <nav class="admin-nav" role="navigation">
     <div class="admin-nav-inner">
       <a href="/admin/dashboard" class="admin-nav-brand-icon">
-        <img src="/images/logos/6898dcba47407e975d78cffb_Logo Image.png" alt="Lucas Iezzi" draggable="false">
+        <% if (typeof logoSmallSrc !== 'undefined' && logoSmallSrc) { %><img src="<%= logoSmallSrc %>" alt="Logo" draggable="false"><% } %>
         <span class="admin-nav-label">admin</span>
       </a>
       <a href="/admin/dashboard" class="admin-nav-brand-wordmark">
-        <img src="/images/logos/6898dd1189ea8889bbac5dd6_8270ccb48ddbf3098d66fce2ee7244dd_Logo Name-p-500.png" alt="Lucas Iezzi" draggable="false">
+        <% if (typeof logoMarkSrc !== 'undefined' && logoMarkSrc) { %><img src="<%= logoMarkSrc %>" alt="Logo" draggable="false"><% } %>
       </a>
       <div class="admin-nav-actions">
         <a href="/admin/dashboard" class="admin-nav-link">← Dashboard</a>
@@ -208,6 +208,6 @@
     </div>
   </div>
 
-  <script src="/js/admin.js" defer></script>
+  <script src="/js/admin.js?v=5" defer></script>
 </body>
 </html>
