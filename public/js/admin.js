@@ -90,18 +90,31 @@
   function initTabs() {
     const tabList = document.querySelector('.admin-tabs');
     if (!tabList) return;
-    tabList.addEventListener('click', function (e) {
-      const tab = e.target.closest('.admin-tab');
-      if (!tab) return;
-      const panelId = 'tab-' + tab.dataset.tab;
+
+    function activateTab(tabName) {
+      const panelId = 'tab-' + tabName;
       tabList.querySelectorAll('.admin-tab').forEach(function (t) {
-        t.classList.toggle('is-active', t === tab);
-        t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+        const active = t.dataset.tab === tabName;
+        t.classList.toggle('is-active', active);
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
       });
       document.querySelectorAll('.admin-tab-panel').forEach(function (p) {
         p.classList.toggle('is-active', p.id === panelId);
       });
+    }
+
+    tabList.addEventListener('click', function (e) {
+      const tab = e.target.closest('.admin-tab');
+      if (!tab) return;
+      sessionStorage.setItem('adminTab', tab.dataset.tab);
+      activateTab(tab.dataset.tab);
     });
+
+    // Restore last active tab on page load
+    const saved = sessionStorage.getItem('adminTab');
+    if (saved && tabList.querySelector(`[data-tab="${saved}"]`)) {
+      activateTab(saved);
+    }
   }
 
   // ── Project list drag-to-reorder ─────────────────────────────────
@@ -984,9 +997,16 @@
       });
     }
 
-    // Auto-test on load if credentials are configured
+    // Auto-test on load if credentials are configured; collapse creds card on success
     const cfg0 = getCredsFromForm();
-    if (cfg0.host && cfg0.user) testConnection(true);
+    if (cfg0.host && cfg0.user) {
+      testConnection(true).then(() => {
+        const credsCard = document.getElementById('rs-creds-card');
+        if (credsCard && rsConnDot && rsConnDot.classList.contains('rs-conn-dot--ok')) {
+          credsCard.open = false;
+        }
+      });
+    }
 
     // Save then immediately test connection
     const rsSaveBtn = document.getElementById('rs-save-creds');
@@ -1053,6 +1073,8 @@
     if (prevBtn) prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
     if (nextBtn) nextBtn.addEventListener('click', () => goToStep(currentStep + 1));
     stepDots.forEach((dot, i) => dot.addEventListener('click', () => goToStep(i)));
+
+    goToStep(0); // initialise button visibility for the starting step
 
     if (carouselRun) {
       carouselRun.addEventListener('click', async () => {
