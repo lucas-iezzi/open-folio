@@ -5,9 +5,12 @@ data/*.db.bak
 data/backups/
 data/server.log
 data/server.pid
-public/images/projects/
-public/images/logos/
-public/images/studio-temp/
+public/images/projects/*
+!public/images/projects/.gitkeep
+public/images/logos/*
+!public/images/logos/.gitkeep
+public/images/studio-temp/*
+!public/images/studio-temp/.gitkeep
 *.log
 npm-debug.log*
 .DS_Store
