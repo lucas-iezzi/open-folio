@@ -1291,20 +1291,13 @@
           if (!r.ok || !r.key) throw new Error(r.error || 'Could not retrieve key.');
           const key     = r.key;
           const authCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;
-          document.getElementById('rs-ssh-pubkey-display').textContent = key;
-          document.getElementById('rs-ssh-auth-cmd').textContent       = authCmd;
+          document.getElementById('rs-ssh-auth-cmd').textContent = authCmd;
           if (r.generated) {
             status.textContent = 'No existing key was found — a new ed25519 key was generated for you.';
           } else {
             status.style.display = 'none';
           }
           content.style.display = '';
-          document.getElementById('rs-copy-pubkey').addEventListener('click', () => {
-            navigator.clipboard.writeText(key).then(() => {
-              document.getElementById('rs-copy-pubkey').textContent = 'Copied!';
-              setTimeout(() => { document.getElementById('rs-copy-pubkey').textContent = 'Copy'; }, 2000);
-            });
-          });
           document.getElementById('rs-copy-authcmd').addEventListener('click', () => {
             navigator.clipboard.writeText(authCmd).then(() => {
               document.getElementById('rs-copy-authcmd').textContent = 'Copied!';
