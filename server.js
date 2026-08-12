@@ -1268,7 +1268,12 @@ COMMON ISSUES:
 - Port conflict on server: sudo lsof -i :3000 (or ss -tlnp | grep 3000)
 - "rsync not found" on Windows: use Git Bash (bundled with Git for Windows) - the Remote Server tab calls rsync directly, so Git Bash's rsync must be in the PATH
 
-Be concise, encouraging, and give exact copy-paste commands. Break complex steps into numbered sub-steps. When a user's server provider works differently from the standard setup, explain the provider-specific differences clearly.`;
+Be concise, encouraging, and give exact copy-paste commands. Break complex steps into numbered sub-steps. When a user's server provider works differently from the standard setup, explain the provider-specific differences clearly.
+
+SSH COMMAND TOOL:
+You can run commands directly on the user's server to help diagnose problems. When you want to run a command, include this marker anywhere in your response (on its own line):
+[SSH_CMD: <command>]
+The user will be shown the command and asked to confirm before it runs. You will automatically receive the output. Use this for diagnosis — prefer read-only commands (pm2 status, cat, ls, systemctl status, journalctl, df, free, etc.) unless a fix genuinely requires writing. Only request one command per message. Do not request a command unless it will meaningfully help diagnose or fix the user's issue.`;
 
 // ── Build the first user message for the LLM — images as base64, text files as content blocks.
 // Images are resized to ≤1568px before encoding (Anthropic's recommended max; saves tokens).
@@ -3676,6 +3681,18 @@ app.post('/api/sandbox/match-style',
     console.error('[sandbox/import-style]', err.message);
     res.status(500).json({ error: 'Style import failed: ' + err.message });
   }
+});
+
+// Deploy assistant — run arbitrary SSH command (AI-suggested, user-confirmed)
+app.post('/admin/deploy/ssh-exec', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const { command } = req.body;
+  if (!command || typeof command !== 'string' || !command.trim()) {
+    return res.status(400).json({ error: 'command required.' });
+  }
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+  const result = sshExec(srv, command.trim().slice(0, 2000), 30000);
+  res.json({ ok: result.ok, output: [result.stdout, result.stderr].filter(Boolean).join('\n') });
 });
 
 // Deploy assistant chat

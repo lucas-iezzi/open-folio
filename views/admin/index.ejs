@@ -709,6 +709,7 @@
                     <p>Note your server's <strong>IP address</strong> — you'll need it throughout setup. When creating the server, <strong>add your SSH key</strong> (your provider will show you how — ask the AI assistant if you need help).</p>
                     <p>In your provider's <strong>firewall or networking settings</strong>, make sure ports <strong>22</strong> (SSH), <strong>80</strong> (HTTP), and <strong>443</strong> (HTTPS) are open. The exact location varies by provider — Hetzner calls it "Firewalls", DigitalOcean calls it "Networking", Vultr calls it "Firewall". The next step also enables the server's software firewall.</p>
                     <div class="rs-manual-note">⚠ Manual — complete this on your provider's website before continuing.</div>
+                    <button class="btn btn-secondary btn-sm rs-manual-done" style="margin-top:.65rem">✓ Done — continue</button>
                   </div>
                 </div>
 
@@ -826,6 +827,7 @@ TTL:   Auto or 3600</pre>
                     <p>Optionally add a second A record for <strong>www</strong> pointing to the same IP.</p>
                     <p>DNS propagation takes <strong>5–30 minutes</strong>. Once it resolves, Caddy automatically obtains your HTTPS certificate — your site will be live at <code>https://yourdomain.com</code>.</p>
                     <div class="rs-manual-note">⚠ Manual — done at your domain registrar's website (Namecheap, Cloudflare, etc.).</div>
+                    <button class="btn btn-secondary btn-sm rs-manual-done" style="margin-top:.65rem">✓ Done — continue</button>
                   </div>
                 </div>
 
@@ -985,22 +987,62 @@ TTL:   Auto or 3600</pre>
 
     function addDeployMsg(role, text) {
       const div = document.createElement('div');
-      div.className = 'deploy-msg deploy-msg--' + (role === 'user' ? 'user' : 'ai');
+      div.className = 'deploy-msg deploy-msg--' + (role === 'user' ? 'user' : role === 'system' ? 'system' : 'ai');
       div.textContent = text;
       chatMessages.appendChild(div);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return div;
     }
 
-    async function sendDeployChat() {
-      const text = chatInput.value.trim();
+    // Parse [SSH_CMD: ...] from AI reply, show confirmation card, run on approval
+    function handleSshCmd(cmd, onDone) {
+      const card = document.createElement('div');
+      card.className = 'deploy-msg deploy-msg--cmd';
+      card.innerHTML =
+        '<div class="deploy-cmd-label">Run on server?</div>' +
+        '<pre class="deploy-cmd-pre">' + cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</pre>' +
+        '<div class="deploy-cmd-btns">' +
+          '<button class="btn btn-primary btn-sm deploy-cmd-run">Run</button>' +
+          '<button class="btn btn-secondary btn-sm deploy-cmd-skip">Skip</button>' +
+        '</div>';
+      chatMessages.appendChild(card);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      card.querySelector('.deploy-cmd-run').addEventListener('click', async () => {
+        card.querySelector('.deploy-cmd-btns').innerHTML = '<span style="color:var(--muted);font-size:.82rem">Running…</span>';
+        try {
+          const r = await fetch('/admin/deploy/ssh-exec', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': DEPLOY_CSRF },
+            body: JSON.stringify({ command: cmd }),
+          });
+          const d = await r.json();
+          const output = (d.output || '').trim() || (d.ok ? '(no output)' : 'Command failed');
+          card.querySelector('.deploy-cmd-btns').innerHTML = '<span style="color:var(--success,#2d8a4e);font-size:.82rem">✓ Ran</span>';
+          addDeployMsg('system', 'Output:\n' + output);
+          onDone('Command ran successfully. Output:\n' + output);
+        } catch (e) {
+          card.querySelector('.deploy-cmd-btns').innerHTML = '<span style="color:#c0392b;font-size:.82rem">✗ Error</span>';
+          onDone('Command failed to run: ' + e.message);
+        }
+      });
+      card.querySelector('.deploy-cmd-skip').addEventListener('click', () => {
+        card.querySelector('.deploy-cmd-btns').innerHTML = '<span style="color:var(--muted);font-size:.82rem">Skipped</span>';
+        onDone('The user declined to run the command.');
+      });
+    }
+
+    async function sendDeployChat(overrideText) {
+      const text = overrideText !== undefined ? overrideText : chatInput.value.trim();
       if (!text || chatSend.disabled) return;
-      chatInput.value = '';
-      chatInput.style.height = 'auto';
+      if (overrideText === undefined) {
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+        addDeployMsg('user', text);
+      }
       chatSend.disabled = true;
       chatInput.disabled = true;
 
-      addDeployMsg('user', text);
       deployHistory.push({ role: 'user', content: text });
       const thinking = addDeployMsg('assistant', 'Thinking…');
       thinking.classList.add('is-thinking');
@@ -1013,9 +1055,20 @@ TTL:   Auto or 3600</pre>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Request failed');
-        thinking.textContent = data.reply;
+
+        // Check for SSH command request
+        const cmdMatch = data.reply.match(/\[SSH_CMD:\s*([\s\S]*?)\]/);
+        const displayText = data.reply.replace(/\[SSH_CMD:\s*[\s\S]*?\]/, '').trim();
+
+        thinking.textContent = displayText || 'I\'d like to run a command to help diagnose this.';
         thinking.classList.remove('is-thinking');
         deployHistory.push({ role: 'assistant', content: data.reply });
+
+        if (cmdMatch) {
+          handleSshCmd(cmdMatch[1].trim(), (result) => {
+            sendDeployChat(result);
+          });
+        }
       } catch (err) {
         thinking.textContent = 'Error: ' + err.message;
         thinking.classList.remove('is-thinking');
@@ -1047,6 +1100,6 @@ TTL:   Auto or 3600</pre>
   </script>
   <% } %>
 
-  <script src="/js/admin.js?v=13" defer></script>
+  <script src="/js/admin.js?v=14" defer></script>
 </body>
 </html>

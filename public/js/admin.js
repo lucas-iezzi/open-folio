@@ -1026,6 +1026,9 @@
     if (prevBtn) prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
     if (nextBtn) nextBtn.addEventListener('click', () => goToStep(currentStep + 1));
     stepDots.forEach((dot, i) => dot.addEventListener('click', () => goToStep(i)));
+    document.querySelectorAll('.rs-manual-done').forEach(btn => {
+      btn.addEventListener('click', () => goToStep(currentStep + 1));
+    });
 
     if (carouselRun) {
       carouselRun.addEventListener('click', async () => {

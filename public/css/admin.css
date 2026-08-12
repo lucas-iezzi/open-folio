@@ -2671,9 +2671,14 @@ details.rs-inner-card[open] > .rs-inner-summary::after { transform: rotate(180de
   white-space: pre-wrap;
   word-break: break-word;
 }
-.deploy-msg--ai { background: var(--bg); border: 1px solid var(--border); align-self: flex-start; border-radius: 4px 10px 10px 10px; }
+.deploy-msg--ai   { background: var(--bg); border: 1px solid var(--border); align-self: flex-start; border-radius: 4px 10px 10px 10px; }
 .deploy-msg--user { background: #1a1b1f; color: #fff; align-self: flex-end; border-radius: 10px 10px 4px 10px; }
 .deploy-msg--ai.is-thinking { color: var(--muted); font-style: italic; }
+.deploy-msg--system { background: var(--bg); border: 1px solid var(--border); align-self: stretch; border-radius: 6px; font-family: monospace; font-size: .78rem; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+.deploy-msg--cmd  { background: var(--bg); border: 1px solid var(--border); align-self: stretch; border-radius: 8px; padding: .65rem .8rem; }
+.deploy-cmd-label { font-size: .78rem; font-weight: 600; color: var(--muted); margin-bottom: .35rem; }
+.deploy-cmd-pre   { background: #111; color: #e2e2e2; font-family: monospace; font-size: .8rem; padding: .5rem .7rem; border-radius: 5px; margin: 0 0 .5rem; white-space: pre-wrap; word-break: break-all; }
+.deploy-cmd-btns  { display: flex; gap: .4rem; }
 .deploy-chat-input-row {
   display: flex;
   gap: .5rem;
