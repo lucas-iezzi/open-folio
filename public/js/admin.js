@@ -938,8 +938,17 @@
       if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--unknown';
       try {
         const r = await apiFetch('/admin/deploy/test', { method: 'POST' });
+        if (!r.ok) {
+          const raw = r.stderr || r.err || '';
+          const msg = raw.includes('Permission denied')
+            ? 'SSH key not authorized — add your public key to the server (see SSH Key Setup below)'
+            : raw.includes('Connection refused')
+              ? 'Connection refused — check host and port'
+              : raw || 'SSH connection failed';
+          throw new Error(msg);
+        }
         if (!silent) {
-          rsCredsFB.textContent = r.message || 'Connected.';
+          rsCredsFB.textContent = 'Connected.';
           rsCredsFB.style.color = 'var(--success, #2d8a4e)';
           setTimeout(() => { rsCredsFB.textContent = ''; }, 2500);
         }
