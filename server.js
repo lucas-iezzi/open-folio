@@ -1897,6 +1897,14 @@ app.post('/admin/deploy/test', requireAuth, requireCsrf, requireLocal, (req, res
   res.json(r);
 });
 
+app.post('/admin/deploy/clear-known-host', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+  const r = spawnSync('ssh-keygen', ['-R', srv.host], { encoding: 'utf8', timeout: 10000 });
+  const out = [r.stdout, r.stderr].filter(Boolean).join('\n').trim();
+  res.json({ ok: r.status === 0 || out.includes('not found'), output: out });
+});
+
 app.get('/admin/deploy/local-pubkey', requireAuth, requireLocal, (req, res) => {
   const home    = os.homedir();
   const sshDir  = path.join(home, '.ssh');

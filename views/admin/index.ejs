@@ -652,6 +652,10 @@
                 <button id="rs-save-creds" class="btn btn-primary btn-sm">Save &amp; test connection</button>
                 <span id="rs-creds-feedback" class="rs-feedback" aria-live="polite"></span>
               </div>
+              <div id="rs-knownhost-wrap" style="display:none;margin-top:.6rem">
+                <button id="rs-clear-knownhost" class="btn btn-secondary btn-sm">Clear saved host key &amp; retry</button>
+                <span style="font-size:.78rem;color:var(--muted);margin-left:.5rem">The server's identity changed (image reset?)</span>
+              </div>
 
               <details class="rs-inner-card" style="margin-top:1.5rem" id="rs-ssh-key-details">
                 <summary class="rs-inner-summary">SSH Key Setup</summary>
@@ -1100,6 +1104,6 @@ TTL:   Auto or 3600</pre>
   </script>
   <% } %>
 
-  <script src="/js/admin.js?v=16" defer></script>
+  <script src="/js/admin.js?v=17" defer></script>
 </body>
 </html>

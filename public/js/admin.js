@@ -930,21 +930,29 @@
 
     updateSshCmd(getCredsFromForm());
 
+    const knownHostWrap = document.getElementById('rs-knownhost-wrap');
+    const clearKnownHostBtn = document.getElementById('rs-clear-knownhost');
+
     async function testConnection(silent) {
       if (!silent) {
         rsCredsFB.textContent = 'Testing connection…';
         rsCredsFB.style.color = 'var(--muted)';
       }
       if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--unknown';
+      if (knownHostWrap) knownHostWrap.style.display = 'none';
       try {
         const r = await apiFetch('/admin/deploy/test', { method: 'POST' });
         if (!r.ok) {
           const raw = r.stderr || r.err || '';
-          const msg = raw.includes('Permission denied')
-            ? 'SSH key not authorized — add your public key to the server (see SSH Key Setup below)'
-            : raw.includes('Connection refused')
-              ? 'Connection refused — check host and port'
-              : raw || 'SSH connection failed';
+          const isKeyChanged = raw.includes('IDENTIFICATION HAS CHANGED') || raw.includes('Offending');
+          if (isKeyChanged && knownHostWrap) knownHostWrap.style.display = '';
+          const msg = isKeyChanged
+            ? 'Server host key has changed — click "Clear saved host key & retry" below'
+            : raw.includes('Permission denied')
+              ? 'SSH key not authorized — add your public key to the server (see SSH Key Setup below)'
+              : raw.includes('Connection refused')
+                ? 'Connection refused — check host and port'
+                : raw || 'SSH connection failed';
           throw new Error(msg);
         }
         if (!silent) {
@@ -960,6 +968,20 @@
         }
         if (rsConnDot) rsConnDot.className = 'rs-conn-dot rs-conn-dot--err';
       }
+    }
+
+    if (clearKnownHostBtn) {
+      clearKnownHostBtn.addEventListener('click', async () => {
+        clearKnownHostBtn.disabled = true;
+        clearKnownHostBtn.textContent = 'Clearing…';
+        try {
+          await apiFetch('/admin/deploy/clear-known-host', { method: 'POST' });
+        } catch {}
+        clearKnownHostBtn.textContent = 'Clear saved host key & retry';
+        clearKnownHostBtn.disabled = false;
+        if (knownHostWrap) knownHostWrap.style.display = 'none';
+        await testConnection(false);
+      });
     }
 
     // Auto-test on load if credentials are configured
