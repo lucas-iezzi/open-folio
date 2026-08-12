@@ -1015,13 +1015,14 @@
     }
 
     // ── Carousel ──
-    const stepPanels  = Array.from(document.querySelectorAll('.rs-step-panel'));
-    const stepDots    = Array.from(document.querySelectorAll('.rs-dot'));
-    const prevBtn     = document.getElementById('rs-prev-step');
-    const nextBtn     = document.getElementById('rs-next-step');
-    const carouselRun = document.getElementById('rs-carousel-run');
-    const stepStatus  = document.getElementById('rs-step-status');
-    let currentStep   = 0;
+    const stepPanels    = Array.from(document.querySelectorAll('.rs-step-panel'));
+    const stepDots      = Array.from(document.querySelectorAll('.rs-dot'));
+    const prevBtn       = document.getElementById('rs-prev-step');
+    const nextBtn       = document.getElementById('rs-next-step');
+    const carouselRun   = document.getElementById('rs-carousel-run');
+    const manualDoneNav = document.getElementById('rs-manual-done-nav');
+    const stepStatus    = document.getElementById('rs-step-status');
+    let currentStep     = 0;
 
     function goToStep(n) {
       if (n < 0 || n >= stepPanels.length) return;
@@ -1032,25 +1033,26 @@
       if (stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--active');
       if (prevBtn) prevBtn.disabled = currentStep === 0;
       if (nextBtn) nextBtn.disabled = currentStep === stepPanels.length - 1;
-      const cmd = stepPanels[currentStep].dataset.cmd;
+      const cmd      = stepPanels[currentStep].dataset.cmd;
+      const isManual = stepPanels[currentStep].dataset.manual === 'true';
       if (carouselRun) {
         carouselRun.style.display = cmd ? '' : 'none';
         if (cmd) {
-          carouselRun.dataset.cmd          = cmd;
-          carouselRun.dataset.needsDomain  = stepPanels[currentStep].dataset.needsDomain  || 'false';
-          carouselRun.dataset.needsPassword= stepPanels[currentStep].dataset.needsPassword || 'false';
+          carouselRun.dataset.cmd           = cmd;
+          carouselRun.dataset.needsDomain   = stepPanels[currentStep].dataset.needsDomain   || 'false';
+          carouselRun.dataset.needsPassword = stepPanels[currentStep].dataset.needsPassword || 'false';
         }
       }
+      if (manualDoneNav) manualDoneNav.style.display = isManual ? '' : 'none';
       if (stepStatus) stepStatus.textContent = '';
       if (logSetup) logSetup.style.display = 'none';
     }
 
+    if (manualDoneNav) manualDoneNav.addEventListener('click', () => goToStep(currentStep + 1));
+
     if (prevBtn) prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
     if (nextBtn) nextBtn.addEventListener('click', () => goToStep(currentStep + 1));
     stepDots.forEach((dot, i) => dot.addEventListener('click', () => goToStep(i)));
-    document.querySelectorAll('.rs-manual-done').forEach(btn => {
-      btn.addEventListener('click', () => goToStep(currentStep + 1));
-    });
 
     if (carouselRun) {
       carouselRun.addEventListener('click', async () => {

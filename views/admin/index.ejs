@@ -701,14 +701,13 @@
               <div class="rs-step-panels">
 
                 <!-- Step 1: Get a VPS -->
-                <div class="rs-step-panel active" data-step="0">
+                <div class="rs-step-panel active" data-step="0" data-manual="true">
                   <div class="rs-sp-head"><span class="rs-step-num">1</span><span class="rs-sp-title">Get a VPS</span></div>
                   <div class="rs-sp-body">
                     <p>Sign up at <strong>Hetzner Cloud</strong>, <strong>DigitalOcean</strong>, or <strong>Vultr</strong> (~$4–7/mo). Choose <strong>Ubuntu 22.04 LTS</strong>, smallest plan (1 CPU, 1–2 GB RAM).</p>
                     <p>Note your server's <strong>IP address</strong> — you'll need it throughout setup. When creating the server, <strong>add your SSH key</strong> (your provider will show you how — ask the AI assistant if you need help).</p>
                     <p>In your provider's <strong>firewall or networking settings</strong>, make sure ports <strong>22</strong> (SSH), <strong>80</strong> (HTTP), and <strong>443</strong> (HTTPS) are open. The exact location varies by provider — Hetzner calls it "Firewalls", DigitalOcean calls it "Networking", Vultr calls it "Firewall". The next step also enables the server's software firewall.</p>
                     <div class="rs-manual-note">⚠ Manual — complete this on your provider's website before continuing.</div>
-                    <button class="btn btn-secondary btn-sm rs-manual-done" style="margin-top:.65rem">✓ Done — continue</button>
                   </div>
                 </div>
 
@@ -815,7 +814,7 @@ pm2 save && pm2 startup</pre>
                 </div>
 
                 <!-- Step 12: Point DNS -->
-                <div class="rs-step-panel" data-step="11">
+                <div class="rs-step-panel" data-step="11" data-manual="true">
                   <div class="rs-sp-head"><span class="rs-step-num">12</span><span class="rs-sp-title">Point your domain to the server</span></div>
                   <div class="rs-sp-body">
                     <p>In your domain registrar's DNS settings, add an <strong>A record</strong>:</p>
@@ -826,7 +825,6 @@ TTL:   Auto or 3600</pre>
                     <p>Optionally add a second A record for <strong>www</strong> pointing to the same IP.</p>
                     <p>DNS propagation takes <strong>5–30 minutes</strong>. Once it resolves, Caddy automatically obtains your HTTPS certificate — your site will be live at <code>https://yourdomain.com</code>.</p>
                     <div class="rs-manual-note">⚠ Manual — done at your domain registrar's website (Namecheap, Cloudflare, etc.).</div>
-                    <button class="btn btn-secondary btn-sm rs-manual-done" style="margin-top:.65rem">✓ Done — continue</button>
                   </div>
                 </div>
 
@@ -835,6 +833,7 @@ TTL:   Auto or 3600</pre>
               <div class="rs-carousel-nav">
                 <button id="rs-prev-step" class="btn btn-secondary btn-sm" disabled>← Previous</button>
                 <button id="rs-carousel-run" class="btn btn-primary btn-sm" style="display:none">Run on server</button>
+                <button id="rs-manual-done-nav" class="btn btn-primary btn-sm" style="display:none">✓ Done — continue</button>
                 <span id="rs-step-status" class="rs-run-status"></span>
                 <button id="rs-next-step" class="btn btn-secondary btn-sm">Next →</button>
               </div>
@@ -1099,6 +1098,6 @@ TTL:   Auto or 3600</pre>
   </script>
   <% } %>
 
-  <script src="/js/admin.js?v=18" defer></script>
+  <script src="/js/admin.js?v=19" defer></script>
 </body>
 </html>
