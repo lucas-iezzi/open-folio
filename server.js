@@ -1687,7 +1687,7 @@ function sshExec(cfg, command, timeoutMs = 60000) {
   const { host, user, sshPort = 22 } = cfg;
   const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
   if (Number(sshPort) !== 22) args.push('-p', String(sshPort));
-  args.push(`${user}@${host}`, command);
+  args.push(`${user}@${host}`, `bash -l -c '${shEsc(command)}'`);
   const r = spawnSync('ssh', args, { timeout: timeoutMs, encoding: 'utf8', cwd: __dirname });
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
@@ -1979,7 +1979,7 @@ app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal,
   const { host, user, sshPort = 22 } = srv;
   const sshArgs = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
   if (Number(sshPort) !== 22) sshArgs.push('-p', String(sshPort));
-  sshArgs.push(`${user}@${host}`, cmd);
+  sshArgs.push(`${user}@${host}`, `bash -l -c '${shEsc(cmd)}'`);
 
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
