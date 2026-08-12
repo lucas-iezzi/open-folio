@@ -1268,7 +1268,7 @@
           const r = await apiFetch('/admin/deploy/local-pubkey', { method: 'GET' });
           if (!r.ok || !r.key) throw new Error(r.error || 'Could not retrieve key.');
           const key     = r.key;
-          const authCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh\necho "${key}" >> ~/.ssh/authorized_keys\nchmod 600 ~/.ssh/authorized_keys`;
+          const authCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;
           document.getElementById('rs-ssh-pubkey-display').textContent = key;
           document.getElementById('rs-ssh-auth-cmd').textContent       = authCmd;
           if (r.generated) {
