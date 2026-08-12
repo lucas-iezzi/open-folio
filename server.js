@@ -1945,6 +1945,51 @@ app.post('/admin/deploy/ssh-run', requireAuth, requireCsrf, requireLocal, (req, 
   res.json({ ...result, output: [result.stdout, result.stderr].filter(Boolean).join('\n') });
 });
 
+// Same as ssh-run but streams output line-by-line as NDJSON for live terminal preview
+app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const { command, repoUrl, domain, password } = req.body;
+  if (!SSH_CMDS[command]) return res.status(400).json({ error: 'Unknown command.' });
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+  const rp = srv.remotePath || '~/open-folio';
+  let cmd;
+  if (command === 'git_clone') {
+    if (!repoUrl || !repoUrl.trim()) return res.status(400).json({ error: 'repoUrl required for git_clone.' });
+    cmd = SSH_CMDS.git_clone(rp, repoUrl.trim());
+  } else if (command === 'caddy_configure') {
+    if (!domain || !domain.trim()) return res.status(400).json({ error: 'domain required for caddy_configure.' });
+    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!/^[a-z0-9][a-z0-9\-\.]*\.[a-z]{2,}$/.test(cleanDomain)) return res.status(400).json({ error: 'Invalid domain format.' });
+    cmd = SSH_CMDS.caddy_configure(rp, cleanDomain);
+  } else if (command === 'server_setup' || command === 'manage_password') {
+    if (!password || String(password).length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters.' });
+    cmd = SSH_CMDS[command](rp, String(password));
+  } else {
+    cmd = SSH_CMDS[command](rp);
+  }
+
+  const { host, user, sshPort = 22 } = srv;
+  const sshArgs = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
+  if (Number(sshPort) !== 22) sshArgs.push('-p', String(sshPort));
+  sshArgs.push(`${user}@${host}`, cmd);
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.flushHeaders();
+
+  const slowCmds = new Set(['apt_update', 'node_install', 'caddy_install', 'server_setup']);
+  const timeoutMs = slowCmds.has(command) ? 180000 : 60000;
+  const proc = spawn('ssh', sshArgs);
+  const timer = setTimeout(() => proc.kill(), timeoutMs);
+
+  const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch {} };
+  proc.stdout.on('data', (chunk) => send({ text: chunk.toString() }));
+  proc.stderr.on('data', (chunk) => send({ text: chunk.toString() }));
+  proc.on('close', (code) => { clearTimeout(timer); send({ done: true, ok: code === 0 }); res.end(); });
+  proc.on('error', (err) => { clearTimeout(timer); send({ text: err.message, done: true, ok: false }); res.end(); });
+  req.on('close', () => { clearTimeout(timer); proc.kill(); });
+});
+
 app.post('/admin/deploy/sync', requireAuth, requireCsrf, requireLocal, (req, res) => {
   const { direction } = req.body;
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
