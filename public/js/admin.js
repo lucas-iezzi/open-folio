@@ -1175,28 +1175,78 @@
     }
 
     // ── Push / Pull ──
+    const rsProgress = document.getElementById('rs-sync-progress');
+
+    function setSyncProgress(text) {
+      if (!rsProgress) return;
+      rsProgress.style.display = text ? '' : 'none';
+      rsProgress.textContent   = text || '';
+    }
+
     async function runSync(direction, label) {
-      const btn = document.getElementById(`rs-${direction}-btn`);
+      const btn  = document.getElementById(`rs-${direction}-btn`);
+      const icon = direction === 'push' ? '↑' : '↓';
       if (btn) btn.disabled = true;
-      showLog(logSync, null, `${label}…`);
-      try {
-        const r = await apiFetch('/admin/deploy/sync', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ direction }),
-        });
-        const summary = r.results
-          ? r.results.map(x => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ')
-          : 'done';
-        const stdout = r.results
-          ? r.results.map(x => `[${x.label}]\n${(x.stdout||'').trim()}${x.stderr?'\n'+x.stderr:''}`).join('\n\n')
-          : '';
-        showLog(logSync, r.ok !== false, `${label}: ${summary}`, stdout);
-      } catch (err) {
-        showLog(logSync, false, err.message);
-      } finally {
-        if (btn) btn.disabled = false;
+
+      const items = [
+        { id: 'db',              label: 'Database'       },
+        { id: 'images/projects', label: 'Project images' },
+        { id: 'images/logos',    label: 'Logo images'    },
+      ];
+
+      // Put log in running state immediately so user knows something is happening
+      if (logSync) { logSync.style.display = 'block'; logSync.className = 'rs-log rs-log--running'; logSync.textContent = ''; }
+
+      const results = [];
+
+      for (const item of items) {
+        setSyncProgress(`${icon} ${item.label}…`);
+        try {
+          const r = await apiFetch('/admin/deploy/sync-item', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ itemId: item.id, direction }),
+          });
+          results.push({ label: item.label, ok: r.ok !== false, output: r.output || '', err: r.err || '' });
+        } catch (err) {
+          results.push({ label: item.label, ok: false, output: '', err: err.message });
+        }
+        // Show live checklist as items complete
+        if (logSync) logSync.textContent = results.map(x => `${x.ok ? '✓' : '✗'} ${x.label}`).join('\n');
       }
+
+      // After push: restart remote server so it loads the new database
+      let restartOk = null;
+      let restartOut = '';
+      if (direction === 'push') {
+        setSyncProgress('↺ Restarting server…');
+        try {
+          const r = await apiFetch('/admin/deploy/ssh-run', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ command: 'restart' }),
+          });
+          restartOk  = r.ok !== false;
+          restartOut = r.output || r.stdout || '';
+        } catch (err) {
+          restartOk  = false;
+          restartOut = err.message;
+        }
+      }
+
+      setSyncProgress(null);
+
+      const allOk = results.every(x => x.ok) && (restartOk === null || restartOk);
+      const summary = results.map(x => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ') +
+        (restartOk !== null ? ` — server ${restartOk ? 'restarted' : 'restart failed'}` : '');
+      const stdout = results.map(x => {
+        const parts = [x.output, x.err].filter(Boolean).join('\n').trim();
+        return `[${x.label}]\n${parts || '(no output)'}`;
+      }).join('\n\n') +
+        (restartOk !== null ? `\n\n[Server restart]\n${restartOut || '(no output)'}` : '');
+
+      showLog(logSync, allOk, `${label}: ${summary}`, stdout);
+      if (btn) btn.disabled = false;
     }
 
     const rsPushBtn = document.getElementById('rs-push-btn');
@@ -1399,6 +1449,48 @@
         });
       });
     }
+  })();
+
+  // ── Auto-pull from server when admin panel opens ────────────────
+  (function initAutoPull() {
+    const SESSION_KEY = 'ofAutoPullTs';
+    const last = parseInt(sessionStorage.getItem(SESSION_KEY) || '0');
+    if (Date.now() - last < 120000) return; // at most once every 2 minutes per tab
+
+    setTimeout(async function () {
+      sessionStorage.setItem(SESSION_KEY, String(Date.now()));
+      try {
+        const r = await apiFetch('/admin/deploy/auto-pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!r.pulled || r.pulled.length === 0) return;
+
+        const needsRestart = r.pulled.some(function (x) { return x.needsRestart; });
+        const labels = r.pulled.map(function (x) { return x.label; }).join(', ');
+
+        const toast = document.createElement('div');
+        toast.setAttribute('role', 'status');
+        toast.style.cssText =
+          'position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;max-width:380px;' +
+          'background:var(--success-bg,#eaf7f0);color:var(--success,#1a7a46);' +
+          'border:1px solid #b2dfc4;border-radius:8px;padding:12px 14px;font-size:13px;' +
+          'box-shadow:0 4px 16px rgba(0,0,0,.12);display:flex;align-items:flex-start;gap:.75rem;';
+        toast.innerHTML =
+          '<span style="flex:1">' +
+            '<strong>&#8595; Auto-synced from server:</strong> ' + esc(labels) + '.' +
+            (needsRestart
+              ? '<br><span style="opacity:.75;font-size:.9em">Database updated — restart the server to apply changes.</span>'
+              : '') +
+          '</span>' +
+          '<button onclick="this.parentElement.parentElement.remove()" ' +
+            'style="background:none;border:none;cursor:pointer;font-size:1.2rem;' +
+            'line-height:1;padding:0;opacity:.5;flex-shrink:0;" aria-label="Dismiss">&times;</button>';
+        document.body.appendChild(toast);
+        setTimeout(function () { if (toast.parentNode) toast.remove(); }, 9000);
+      } catch (_) { /* silent — no server configured or SSH unavailable */ }
+    }, 1500);
   })();
 
 })();

@@ -18,7 +18,7 @@
     <% } %>
 
     <% if (section.body) { %>
-    <div class="project-section__body"><%- escape(section.body).replace(/\n/g, '<br>') %></div>
+    <div class="project-section__body"><%- (section.body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') %></div>
     <% } %>
 
     <% if (section.images && section.images.length > 0) { %>

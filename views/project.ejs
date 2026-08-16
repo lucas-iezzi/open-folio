@@ -7,7 +7,7 @@
   <% } else if (typeof hasSandboxStyle !== 'undefined' && hasSandboxStyle) { %>
   <link rel="stylesheet" href="/sandbox-active.css?page=<%= project.slug %>">
   <% } %>
-  <title><%= project.title %> — Lucas Iezzi</title>
+  <title><%= project.title %> — <%= siteName %></title>
   <meta name="description" content="<%= project.subtitle || project.title %>">
 </head>
 <body>

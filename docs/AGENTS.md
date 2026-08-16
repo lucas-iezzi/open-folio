@@ -170,23 +170,26 @@ Two modes for LLM-assisted project creation.
 **Key files:**
 - `public/js/studio.js` — all studio frontend logic
 - `views/admin/studio.ejs` — single template for both modes (mode toggled via EJS)
-- `views/partials/project-body.ejs` — shared by public project page + edit-mode preview. Uses `<%- escape(section.body).replace(/\n/g, '<br>') %>` to safely render user content with newlines.
+- `views/partials/project-body.ejs` — shared by public project page + edit-mode preview. Uses an inline HTML escape chain (`replace(/&/g,'&amp;')…replace(/\n/g,'<br>')`) to render user content safely. Do NOT use `escape()` here — EJS 3.x does not expose its HTML escaper as `escape`; the bare name resolves to the deprecated JS global `escape()` which URL-encodes spaces as `%20`.
 
-## Launcher (launcher.js)
+## Launchers
 
-Interactive CLI for everything:
+There are two separate launchers — users double-click one, developers can use either:
 
-**Main menu:**
-- `[1]` Start server
-- `[2]` Configure AI provider & API key (sub-menu: Anthropic / OpenAI / Gemini)
-- `[3]` Change admin password
-- `[4]` Change port
-- `[5]` Deploy & sync tools
-- `[6]` Re-run full setup
+### scripts/launcher-server.js (GUI launcher — used by Start.bat / Start.command)
 
-**Deploy sub-menu:** SSH into server, rsync push/pull, restart via PM2, view logs, git pull + restart, server status, deployment checklist. Server connection saved to `.launcher-config.json` (gitignored).
+A small Express web server that serves a single-page setup/launch UI. `Start.bat` and `Start.command` each:
+1. Install Node.js if missing (platform-specific installers)
+2. Run `npm install` if `node_modules` is absent
+3. Launch `scripts/launcher-server.js` on a free port and open it in the browser
 
-**Config file** (`.launcher-config.json`): stores `{ server: { host, user, sshPort, remotePath } }`.
+The launcher-server UI provides: first-time setup (password, AI key, port), start/stop the portfolio server, view status, sync content to/from a remote server. Its sync uses rsync when available, falling back to scp (scp is always present on Windows via OpenSSH alongside ssh).
+
+### launcher.js (CLI launcher)
+
+Interactive terminal menu. Currently the **deploy sub-menu** (`deployMenu()`) is dead code — it was written before the admin panel's Remote Server tab existed. The active menu covers: start/stop server, configure AI, change password, change port, re-run setup.
+
+**Config file** (`.launcher-config.json`): stores `{ server: { host, user, sshPort, remotePath } }`. Read by both launchers and by `server.js` for the admin panel's Remote Server tab.
 
 ## Deployment
 
@@ -199,10 +202,10 @@ Recommended stack: Ubuntu 22.04 + Node.js 18+ + PM2 + Caddy.
 **First deploy to a fresh server:**
 ```bash
 git clone <repo> ~/open-folio && cd ~/open-folio && npm install
-npm run setup                                    # generates .env on the server
-rsync -avz data/portfolio.db user@HOST:~/open-folio/data/
-rsync -avz public/images/projects/ user@HOST:~/open-folio/public/images/projects/
-rsync -avz public/images/logos/    user@HOST:~/open-folio/public/images/logos/
+npm run setup                                        # generates .env on the server
+scp data/portfolio.db user@HOST:~/open-folio/data/
+scp -r public/images/projects user@HOST:~/open-folio/public/images/
+scp -r public/images/logos    user@HOST:~/open-folio/public/images/
 npm install -g pm2
 pm2 start scripts/ecosystem.config.js --env production
 pm2 save && pm2 startup
@@ -211,6 +214,11 @@ sudo systemctl reload caddy
 ```
 
 **Deploy tab:** The admin panel's Deploy tab (only shown when accessing locally — hostname is `localhost`, `127.0.0.1`, or a raw IP) has a step-by-step guide and an AI chat assistant for deployment questions.
+
+**Content sync:** All push/pull uses `scp` (bundled with OpenSSH — always available alongside `ssh`). No rsync dependency. Key endpoints:
+- `POST /admin/deploy/sync` — full push or pull (DB + all image dirs)
+- `POST /admin/deploy/sync-item` — single item push or pull (db | images/logos | images/projects)
+- `POST /admin/deploy/auto-pull` — called automatically 1.5 s after each admin panel open; compares local vs remote file counts via a single SSH call; pulls missing images and DB (only if local is a fresh seed DB < 50% of remote size); throttled to once per 30 s server-side and once per 2 min per browser tab via `sessionStorage`.
 
 ## REST API
 

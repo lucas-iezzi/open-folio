@@ -141,9 +141,9 @@ This transfers your database and all images in one shot.
 
 Alternatively, run from your local terminal:
 ```bash
-rsync -avz data/portfolio.db USER@SERVER_IP:~/open-folio/data/
-rsync -avz public/images/projects/ USER@SERVER_IP:~/open-folio/public/images/projects/
-rsync -avz public/images/logos/ USER@SERVER_IP:~/open-folio/public/images/logos/
+scp data/portfolio.db USER@SERVER_IP:~/open-folio/data/
+scp -r public/images/projects USER@SERVER_IP:~/open-folio/public/images/
+scp -r public/images/logos USER@SERVER_IP:~/open-folio/public/images/
 ```
 
 ### Step 6: Start the site with PM2
@@ -199,6 +199,8 @@ sudo systemctl restart caddy
 
 After adding or editing projects locally, push your changes to the server from the **Remote Server tab** → **Push to server**. This updates the database and images.
 
+When you open the admin panel locally, it checks the server in the background and automatically pulls any content (images or database) that exists on the server but is missing locally. A small notification appears in the corner if anything was synced. You don't need to click anything — this happens on every admin panel open, throttled to at most once every two minutes.
+
 ### Code updates
 
 When a new version of open-folio is released:
@@ -219,8 +221,8 @@ From the **Remote Server tab**: click **Download backup** to download everything
 
 Or manually:
 ```bash
-rsync -avz USER@SERVER_IP:~/open-folio/data/ backup/data/
-rsync -avz USER@SERVER_IP:~/open-folio/public/images/ backup/images/
+scp USER@SERVER_IP:~/open-folio/data/portfolio.db backup/
+scp -r USER@SERVER_IP:~/open-folio/public/images backup/
 ```
 
 ### Changing settings on the live server
@@ -256,5 +258,5 @@ Most likely the `.env` is missing or incomplete — run `node manage.js` on the 
 **HTTPS not working**  
 Wait a few minutes after DNS propagation. Caddy fetches the certificate automatically. Check: `sudo systemctl status caddy` for errors.
 
-**"rsync not found" on Windows**  
-The Remote Server tab's sync features use rsync. On Windows, install Git for Windows (which includes rsync in Git Bash). Make sure Git Bash's bin directory is in your PATH.
+**Content sync (push/pull) fails with "ssh not found" or "scp not found"**  
+Sync uses `ssh` and `scp` from OpenSSH, which ships with Windows 10/11 (build 1809+), macOS, and all major Linux distros. If the commands aren't found, install OpenSSH Client: on Windows go to **Settings → System → Optional Features → Add a feature → OpenSSH Client**; on Ubuntu/Debian run `sudo apt install openssh-client`.

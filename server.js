@@ -188,9 +188,9 @@ function getLogos() {
     setSetting('logo_mark', '/images/logos/' + markFile);
 })();
 
-// Seed site name/tagline from old hardcoded defaults (one-time migration).
-if (!getSetting('site_name'))    setSetting('site_name', 'lucas\niezzi');
-if (!getSetting('site_tagline')) setSetting('site_tagline', 'I am a creative problem solver crafting products that are engineered for enjoyment');
+// Seed generic defaults — only runs on first startup when no DB row exists yet.
+if (!getSetting('site_name'))    setSetting('site_name', 'Your Name');
+if (!getSetting('site_tagline')) setSetting('site_tagline', 'Change this text in the settings or sandbox');
 
 function rowToProject(row) {
   return {
@@ -292,6 +292,12 @@ app.use(session({
 // ── View engine ───────────────────────────────────────────────────────────────
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+
+// Expose plain-text site name to every view for <title> tags etc.
+app.use((req, res, next) => {
+  res.locals.siteName = (getSetting('site_name') || 'Your Name').replace(/\n/g, ' ');
+  next();
+});
 
 // ── Static files ──────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -566,7 +572,11 @@ const PROJECT_SCHEMA = `{
   ]
 }`;
 
-const STUDIO_SYSTEM_PROMPT = `You are an AI assistant helping create portfolio project pages for Lucas Iezzi, a product designer and engineer.
+function studioOwnerName() {
+  return (getSetting('site_name') || 'the site owner').replace(/\n/g, ' ');
+}
+
+function studioSystemPrompt() { return `You are an AI assistant helping create portfolio project pages for ${studioOwnerName()}.
 
 Given a project description and uploaded files, generate a structured project page.
 
@@ -586,9 +596,9 @@ Rules:
 - Write in a professional, engaging portfolio voice
 - Keep the project concise: each section body should be a single short paragraph (2-4 sentences). Focus on what was done and why it matters — not granular technical details or step-by-step breakdowns
 - thumbnail: most visually striking image, ideally a hero shot; empty string if none
-- Do not invent technical details not present in the description`;
+- Do not invent technical details not present in the description`; }
 
-const STUDIO_REFINE_PROMPT = `You are an AI assistant helping refine a portfolio project page for Lucas Iezzi.
+function studioRefinePrompt() { return `You are an AI assistant helping refine a portfolio project page for ${studioOwnerName()}.
 
 You are in an ongoing conversation. The user will send feedback, questions, or requests about the current project page.
 
@@ -610,7 +620,7 @@ When regenerating:
 - Keep all section bodies concise: one short paragraph (2-4 sentences) per section — focus on what was done and why it matters, not granular technical details
 
 Decide to regenerate when the user: asks to change text, move/add/remove sections or images, update title/subtitle/slug, or makes any structural request.
-Decide NOT to regenerate when the user: asks a question about the current page, gives general positive feedback, or says something unrelated to page changes.`;
+Decide NOT to regenerate when the user: asks a question about the current page, gives general positive feedback, or says something unrelated to page changes.`; }
 
 // ── AI provider registry ──────────────────────────────────────────────────────
 const PROVIDERS = {
@@ -666,7 +676,7 @@ async function callAI({ messages, systemPrompt = '', tier = 'fast' }) {
   return callLLM({ provider: p, model: getModelId(tier, p), messages, systemPrompt });
 }
 
-async function callLLM({ provider, model, messages, systemPrompt = STUDIO_SYSTEM_PROMPT }) {
+async function callLLM({ provider, model, messages, systemPrompt = studioSystemPrompt() }) {
   const p = provider || getActiveProvider();
 
   if (p === 'anthropic') {
@@ -768,7 +778,7 @@ IMPORTANT: When setting customCSS, include ALL existing customCSS from the curre
 
 CSS selectors for this portfolio:
   body                    — page background and base text color/font
-  .site-name              — the name in the hero (default: "lucas iezzi")
+  .site-name              — the name in the hero (default: the site name from settings)
   .hero-text              — tagline paragraph under the name
   .hero-text .highlight   — highlighted word within the tagline
   .hero                   — hero section wrapper
@@ -794,9 +804,9 @@ Do NOT wrap CSS in <style> tags — raw CSS rules only.
 
 ━━━ TEXT CONTENT OVERRIDES ━━━
   text.heroTagline  — overrides the tagline paragraph text (max 500 chars)
-                      Default: "I am a creative problem solver crafting products that are engineered for enjoyment"
+                      Default: value from site settings
   text.heroName     — overrides the name displayed in the hero; use \\n for a line break (max 100 chars)
-                      Default: "lucas\\niezzi"
+                      Default: value from site settings
 
 ━━━ LAYOUT SHORTCUTS ━━━
 Color tokens (hex strings):
@@ -1223,7 +1233,7 @@ REMOTE SERVER TAB — what the user sees and can do:
    Step 10: Start with PM2 — pm2 start scripts/ecosystem.config.js --env production && pm2 save
    Step 11: Configure Caddy — writes Caddyfile with the user's domain → reverse_proxy localhost:3000
    Step 12: Point DNS (manual — A record at registrar pointing to server IP)
-4. Content Sync: Push (rsync local → server), Pull (rsync server → local), Compare (shows diff), Backup (downloads everything).
+4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows diff), Backup (downloads everything). Auto-pull runs silently on each admin panel open.
 5. Server Commands (one-click buttons that run over SSH):
    - Restart site: pm2 restart open-folio
    - View logs: pm2 logs open-folio --lines 80
@@ -1276,7 +1286,7 @@ COMMON ISSUES:
 - "Permission denied (publickey)": SSH key not on server — add via provider web console or SSH Key Setup in the Credentials card
 - Site won't start: check ${remotePath}/.env exists (run node manage.js to create it); check pm2 logs
 - HTTPS not working: verify DNS A record points to ${host}; check: sudo systemctl status caddy
-- rsync push fails: destination directories must exist — if images are missing after clone, run the mkdir command above
+- scp/ssh not found: install OpenSSH Client (Windows: Settings → Optional Features; Linux: apt install openssh-client)
 - Port conflict: ss -tlnp | grep 3000
 
 PROVIDER-SPECIFIC NOTES:
@@ -1693,14 +1703,6 @@ function commandExists(cmd) {
   } catch { return false; }
 }
 
-// Convert a local absolute path to a form rsync (MSYS2/Git Bash on Windows) accepts.
-// On non-Windows this is a no-op.
-function toRsyncLocal(p) {
-  if (process.platform !== 'win32') return p;
-  // C:\Users\foo\bar -> /c/Users/foo/bar
-  return '/' + p[0].toLowerCase() + p.slice(2).replace(/\\/g, '/');
-}
-
 function sshExec(cfg, command, timeoutMs = 60000) {
   const { host, user, sshPort = 22 } = cfg;
   const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
@@ -1710,11 +1712,12 @@ function sshExec(cfg, command, timeoutMs = 60000) {
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
 
-function rsyncRun(src, dest, sshPort = 22, extra = [], timeoutMs = 120000) {
-  const args = ['-avz'];
-  if (Number(sshPort) !== 22) args.push('-e', `ssh -p ${sshPort}`);
-  args.push(...extra, src, dest);
-  const r = spawnSync('rsync', args, { timeout: timeoutMs, encoding: 'utf8', cwd: __dirname });
+function scpRun(src, dest, sshPort = 22, isDir = false, timeoutMs = 120000) {
+  const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes'];
+  if (isDir) args.push('-r');
+  if (Number(sshPort) !== 22) args.push('-P', String(sshPort));
+  args.push(src, dest);
+  const r = spawnSync('scp', args, { timeout: timeoutMs, encoding: 'utf8', cwd: __dirname });
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
 
@@ -1911,6 +1914,17 @@ app.post('/admin/deploy/config', requireAuth, requireCsrf, requireLocal, (req, r
 app.post('/admin/deploy/test', requireAuth, requireCsrf, requireLocal, (req, res) => {
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+
+  // Verify OpenSSH client tools are available before attempting connection.
+  // scp ships with ssh in every OpenSSH bundle, so checking ssh covers both.
+  const sshCheck = spawnSync('ssh', ['-V'], { encoding: 'utf8', timeout: 5000 });
+  if (sshCheck.error) {
+    const hint = process.platform === 'win32'
+      ? 'Go to Settings → Optional Features → Add a feature → OpenSSH Client.'
+      : 'Install openssh-client via your package manager (e.g. apt install openssh-client).';
+    return res.json({ ok: false, stdout: '', stderr: `OpenSSH not found on this machine. ${hint}` });
+  }
+
   const r = sshExec(srv, 'echo "OK" && uname -a && uptime', 15000);
   res.json(r);
 });
@@ -2023,19 +2037,19 @@ app.post('/admin/deploy/sync', requireAuth, requireCsrf, requireLocal, (req, res
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+
   const { host, user, sshPort = 22, remotePath = '~/open-folio' } = srv;
   const remote = `${user}@${host}`;
-  const items = [
-    { label: 'Database',       local: 'data/portfolio.db',          server: `${remote}:${remotePath}/data/` },
-    { label: 'Project images', local: 'public/images/projects/',    server: `${remote}:${remotePath}/public/images/projects/` },
-    { label: 'Logo images',    local: 'public/images/logos/',       server: `${remote}:${remotePath}/public/images/logos/` },
-  ];
-  const results = items.map(({ label, local, server }) => ({
-    label,
-    ...(direction === 'push'
-      ? rsyncRun(local, server, sshPort)
-      : rsyncRun(server, local, sshPort)),
-  }));
+  const results = [];
+  if (direction === 'push') {
+    results.push({ label: 'Database',       ...scpRun('data/portfolio.db',      `${remote}:${remotePath}/data/`,          sshPort) });
+    results.push({ label: 'Project images', ...scpRun('public/images/projects', `${remote}:${remotePath}/public/images/`, sshPort, true) });
+    results.push({ label: 'Logo images',    ...scpRun('public/images/logos',    `${remote}:${remotePath}/public/images/`, sshPort, true) });
+  } else {
+    results.push({ label: 'Database',       ...scpRun(`${remote}:${remotePath}/data/portfolio.db`,      'data/',          sshPort) });
+    results.push({ label: 'Project images', ...scpRun(`${remote}:${remotePath}/public/images/projects`, 'public/images/', sshPort, true) });
+    results.push({ label: 'Logo images',    ...scpRun(`${remote}:${remotePath}/public/images/logos`,    'public/images/', sshPort, true) });
+  }
   res.json({ ok: results.every(r => r.ok), results });
 });
 
@@ -2145,32 +2159,103 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
   res.json({ ok: true, items });
 });
 
+// Server-side cooldown — prevents the auto-pull check from running more than once per 30 s
+let _autoPullLastRun = 0;
+
+app.post('/admin/deploy/auto-pull', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const now = Date.now();
+  if (now - _autoPullLastRun < 30000) return res.json({ ok: true, pulled: [], skipped: 'cooldown' });
+  _autoPullLastRun = now;
+
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.json({ ok: true, pulled: [] });
+
+  const { user, host, sshPort = 22, remotePath = '~/open-folio' } = srv;
+  const remote = `${user}@${host}`;
+  const erp = xrp(remotePath);
+
+  function countLocalFiles(dir) {
+    if (!fs.existsSync(dir)) return 0;
+    let n = 0;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) n += countLocalFiles(path.join(dir, e.name));
+      else if (e.name !== '.gitkeep') n++;
+    }
+    return n;
+  }
+
+  const localDbPath    = path.join(__dirname, 'data', 'portfolio.db');
+  const localDbExists  = fs.existsSync(localDbPath);
+  const localDbSize    = localDbExists ? fs.statSync(localDbPath).size : 0;
+  const localProjCount = countLocalFiles(path.join(__dirname, 'public', 'images', 'projects'));
+  const localLogoCount = countLocalFiles(path.join(__dirname, 'public', 'images', 'logos'));
+
+  // Single SSH call to gather all remote stats at once
+  const check = sshExec(srv,
+    `echo "db=$(stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo 0)"; ` +
+    `echo "proj=$(find "${erp}/public/images/projects" -type f ! -name .gitkeep 2>/dev/null | wc -l | tr -d ' ')"; ` +
+    `echo "logo=$(find "${erp}/public/images/logos" -type f ! -name .gitkeep 2>/dev/null | wc -l | tr -d ' ')"`,
+    30000
+  );
+
+  if (!check.ok) return res.json({ ok: true, pulled: [], reason: 'ssh-unavailable' });
+
+  function parseVal(key) {
+    const m = check.stdout.match(new RegExp(`^${key}=(\\d+)`, 'm'));
+    return m ? parseInt(m[1]) : 0;
+  }
+
+  const remoteDbSize    = parseVal('db');
+  const remoteProjCount = parseVal('proj');
+  const remoteLogoCount = parseVal('logo');
+
+  const pulled = [];
+
+  // Pull DB if local is missing or is a tiny seed DB (< 50% of server size).
+  // 8 KB threshold rules out non-existent (0) while allowing a freshly seeded schema.
+  if (remoteDbSize > 8192 && (!localDbExists || localDbSize < remoteDbSize * 0.5)) {
+    const r = scpRun(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000);
+    if (r.ok) pulled.push({ label: 'Database', needsRestart: true });
+  }
+
+  // Pull project/logo image directories when server has more files than local
+  if (remoteProjCount > localProjCount) {
+    const r = scpRun(`${remote}:${remotePath}/public/images/projects`, 'public/images/', sshPort, true, 300000);
+    if (r.ok) pulled.push({ label: 'Project images' });
+  }
+
+  if (remoteLogoCount > localLogoCount) {
+    const r = scpRun(`${remote}:${remotePath}/public/images/logos`, 'public/images/', sshPort, true, 60000);
+    if (r.ok) pulled.push({ label: 'Logo images' });
+  }
+
+  res.json({ ok: true, pulled });
+});
+
 app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, (req, res) => {
   const { itemId, direction } = req.body;
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
   if (!itemId || typeof itemId !== 'string') return res.status(400).json({ error: 'itemId required.' });
-  if (!/^(db|images\/logos|images\/projects\/[a-z0-9][a-z0-9\-]*)$/.test(itemId)) return res.status(400).json({ error: 'Invalid itemId.' });
+  if (!/^(db|images\/logos|images\/projects(\/[a-z0-9][a-z0-9\-]*)?)$/.test(itemId)) return res.status(400).json({ error: 'Invalid itemId.' });
 
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
   const { host, user, sshPort = 22, remotePath = '~/open-folio' } = srv;
   const remote = `${user}@${host}`;
 
-  let localPath, serverPath;
+  let result;
   if (itemId === 'db') {
-    localPath  = 'data/portfolio.db';
-    serverPath = `${remote}:${remotePath}/data/`;
+    result = direction === 'push'
+      ? scpRun('data/portfolio.db', `${remote}:${remotePath}/data/`, sshPort, false, 60000)
+      : scpRun(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000);
   } else {
-    const rel  = itemId.replace(/^images\//, '');
-    localPath  = `public/images/${rel}/`;
-    serverPath = `${remote}:${remotePath}/public/images/${rel}/`;
+    const rel = itemId.replace(/^images\//, '');
+    result = direction === 'push'
+      ? scpRun(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
+      : scpRun(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000);
   }
 
-  const result = direction === 'push'
-    ? rsyncRun(localPath, serverPath, sshPort)
-    : rsyncRun(serverPath, localPath, sshPort);
-
-  res.json({ ok: result.ok, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), err: result.err });
+  res.json({ ok: result.ok, output: [result.stdout, result.stderr, result.err].filter(Boolean).join('\n'), err: result.err });
 });
 
 app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, res) => {
@@ -2179,15 +2264,12 @@ app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, r
   const { host, user, sshPort = 22, remotePath = '~/open-folio' } = srv;
   const remote = `${user}@${host}`;
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const backupDir     = path.join(__dirname, 'data', 'backups', ts);
-  const backupImgDir  = path.join(backupDir, 'images');
-  fs.mkdirSync(backupImgDir, { recursive: true });
-  // Convert to Unix-style paths for rsync on Windows (MSYS2/Git Bash)
-  const destDb  = toRsyncLocal(backupDir)  + '/';
-  const destImg = toRsyncLocal(backupImgDir) + '/';
+  const backupDir = path.join(__dirname, 'data', 'backups', ts);
+  fs.mkdirSync(backupDir, { recursive: true });
+  // scp copies remote portfolio.db into backupDir/ and remote images/ dir into backupDir/images/
   const results = [
-    { label: 'Database', ...rsyncRun(`${remote}:${remotePath}/data/portfolio.db`, destDb,  sshPort) },
-    { label: 'Images',   ...rsyncRun(`${remote}:${remotePath}/public/images/`,    destImg, sshPort) },
+    { label: 'Database', ...scpRun(`${remote}:${remotePath}/data/portfolio.db`, backupDir, sshPort) },
+    { label: 'Images',   ...scpRun(`${remote}:${remotePath}/public/images`,     backupDir, sshPort, true) },
   ];
   res.json({ ok: results.every(r => r.ok), backupPath: path.relative(__dirname, backupDir), results });
 });
@@ -2256,8 +2338,8 @@ app.post('/admin/deploy/push-backup', requireAuth, requireCsrf, requireLocal, (r
   const results = [];
   const dbPath  = path.join(backupDir, 'portfolio.db');
   const imgPath = path.join(backupDir, 'images');
-  if (fs.existsSync(dbPath))  results.push({ label: 'Database', ...rsyncRun(toRsyncLocal(dbPath), `${remote}:${remotePath}/data/`, sshPort) });
-  if (fs.existsSync(imgPath)) results.push({ label: 'Images',   ...rsyncRun(toRsyncLocal(imgPath) + '/', `${remote}:${remotePath}/public/images/`, sshPort) });
+  if (fs.existsSync(dbPath))  results.push({ label: 'Database', ...scpRun(dbPath, `${remote}:${remotePath}/data/`, sshPort) });
+  if (fs.existsSync(imgPath)) results.push({ label: 'Images',   ...scpRun(imgPath, `${remote}:${remotePath}/public/`, sshPort, true) });
   res.json({ ok: results.every(r => r.ok), results });
 });
 
@@ -2924,7 +3006,7 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
     messages.push({ role: 'user', content: userBlocks.length === 1 ? userBlocks[0].text : userBlocks });
 
     if (!hasActiveKey()) return res.status(503).json({ error: 'AI not configured — add an API key in Settings.' });
-    const rawText = await callAI({ messages, systemPrompt: STUDIO_REFINE_PROMPT, tier: modelTier });
+    const rawText = await callAI({ messages, systemPrompt: studioRefinePrompt(), tier: modelTier });
     const parsed  = extractJSON(rawText);
 
     const { message = '', regenerate = false, project: projectData } = parsed;
@@ -3294,8 +3376,8 @@ app.get('/api/sandbox/data', (req, res) => {
   ).all();
   res.json({
     settings: {
-      site_name: 'lucas iezzi',
-      tagline: 'product designer and creative engineer',
+      site_name: (getSetting('site_name') || 'Your Name').replace(/\n/g, ' '),
+      tagline:   getSetting('site_tagline') || '',
       logo_image: null,
     },
     projects,
@@ -3926,7 +4008,7 @@ function sanitizeSections(sections, { allowTemp = false } = {}) {
 // ERROR HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.use((req, res) => res.status(404).render('404'));
+app.use((req, res) => res.status(404).render('404', { siteName: (getSetting('site_name') || 'Your Name').replace(/\n/g, ' ') }));
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
@@ -3935,7 +4017,7 @@ app.use((err, req, res, next) => {
   if (req.xhr || req.headers.accept?.includes('application/json')) {
     return res.status(status).json({ error: 'Internal server error.' });
   }
-  res.status(status).render('error', { message: 'Something went wrong.' });
+  res.status(status).render('error', { message: 'Something went wrong.', siteName: (getSetting('site_name') || 'Your Name').replace(/\n/g, ' ') });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

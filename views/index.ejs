@@ -3,8 +3,8 @@
 <head>
   <%- include('partials/head') %>
   <link rel="stylesheet" href="/sandbox-active.css">
-  <title>Lucas Iezzi</title>
-  <meta name="description" content="Lucas Iezzi — product designer and creative engineer.">
+  <title><%= siteName %></title>
+  <meta name="description" content="<%= siteName %><% if (siteTagline) { %> — <%= siteTagline %><% } %>">
 </head>
 <body>
   <%- include('partials/nav') %>

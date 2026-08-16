@@ -41,7 +41,7 @@ Only shown when running locally. Full server management without needing a termin
 - Save SSH credentials (host, username, port, remote path)
 - Test SSH connection with one click
 - Step-by-step server setup — each step has a "Run on server" button that executes the command and shows output
-- **Content Sync:** push your local database and images to the server, pull from server, compare differences, or download a full backup
+- **Content Sync:** push your local database and images to the server, pull from server, compare differences, or download a full backup. When the admin panel opens, it automatically checks the server in the background and pulls any content (images or database) that is missing locally — a brief notification appears in the corner if anything was synced.
 - **Server Commands:** restart the site, view logs, check status (PM2 + disk + uptime), pull code updates (git pull + npm install + restart)
 - Copy the SSH command to open a terminal session to your server
 - AI assistant for troubleshooting and setup questions
