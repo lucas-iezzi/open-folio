@@ -17,6 +17,37 @@
     return body;
   }
 
+  // Reads an NDJSON (one JSON object per line) streaming response, calling onEvent for
+  // each parsed line as it arrives — used for long-running operations (content sync) that
+  // report progress while still in flight instead of only resolving at the very end.
+  async function streamNdjson(url, body, onEvent) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken(), 'Accept': 'application/x-ndjson' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) {
+      let msg = `Request failed (${res.status})`;
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* not JSON */ }
+      throw new Error(msg);
+    }
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) { try { onEvent(JSON.parse(line)); } catch { /* skip malformed line */ } }
+      }
+    }
+    if (buf.trim()) { try { onEvent(JSON.parse(buf.trim())); } catch { /* skip malformed line */ } }
+  }
+
   function toSlug(str) {
     return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
   }
@@ -1186,6 +1217,11 @@
       rsProgress.textContent   = text || '';
     }
 
+    // Pushes/pulls db + project images + logo images, one at a time. Each item is
+    // transferred, then verified against the actual remote/local file listing, and
+    // retried automatically (server-side) until it matches — so "done" here means the
+    // files are confirmed present, not just that scp exited 0. Progress is rendered into
+    // the log box live as it streams in, instead of only appearing once everything finishes.
     async function runSync(direction, label) {
       const btn  = document.getElementById(`rs-${direction}-btn`);
       const icon = direction === 'push' ? '↑' : '↓';
@@ -1200,22 +1236,58 @@
       // Put log in running state immediately so user knows something is happening
       if (logSync) { logSync.style.display = 'block'; logSync.className = 'rs-log rs-log--running'; logSync.textContent = ''; }
 
-      const results = [];
+      const checklist = [];
+      const results   = [];
+
+      function render(liveLine) {
+        const text = checklist.concat(liveLine ? [liveLine] : []).join('\n');
+        if (logSync) showLog(logSync, null, text || 'Starting…');
+      }
 
       for (const item of items) {
-        setSyncProgress(`${icon} ${item.label}…`);
+        let itemOk    = false;
+        let attempts  = 1;
+        let itemNotes = [];
+
         try {
-          const r = await apiFetch('/admin/deploy/sync-item', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ itemId: item.id, direction }),
+          await streamNdjson('/admin/deploy/sync-item', { itemId: item.id, direction }, (ev) => {
+            let line = null;
+            if (ev.stage === 'transfer') {
+              attempts = ev.attempt;
+              line = attempts > 1
+                ? `${icon} ${item.label} — retrying transfer (attempt ${attempts}/${ev.maxAttempts})…`
+                : `${icon} ${item.label} — transferring…`;
+            } else if (ev.stage === 'transfer-failed') {
+              line = `⚠ ${item.label} — transfer error: ${ev.detail?.message || 'unknown error'}`;
+            } else if (ev.stage === 'verify') {
+              line = `🔍 ${item.label} — verifying on server…`;
+            } else if (ev.stage === 'verify-done' && ev.ok) {
+              const n = ev.detail?.totalChecked ?? 0;
+              line = `✓ ${item.label} — verified (${n} file${n === 1 ? '' : 's'} match)`;
+            } else if (ev.stage === 'verify-done' && !ev.ok) {
+              const n = ev.detail?.missing ? ev.detail.missing.length : null;
+              line = n !== null
+                ? `⚠ ${item.label} — ${n} file${n === 1 ? '' : 's'} don't match yet`
+                : `⚠ ${item.label} — size mismatch after transfer`;
+            } else if (ev.stage === 'retrying') {
+              line = `↻ ${item.label} — will retry (${ev.nextAttempt}/${ev.maxAttempts})…`;
+            } else if (ev.done) {
+              itemOk = ev.ok;
+              if (!ev.ok) {
+                const missing = ev.detail?.missing;
+                itemNotes = missing && missing.length ? missing : [ev.detail?.message || 'Verification failed.'];
+              }
+            }
+            if (line) { setSyncProgress(line); render(line); }
           });
-          results.push({ label: item.label, ok: r.ok !== false, output: r.output || '', err: r.err || '' });
         } catch (err) {
-          results.push({ label: item.label, ok: false, output: '', err: err.message });
+          itemOk    = false;
+          itemNotes = [err.message];
         }
-        // Show live checklist as items complete
-        if (logSync) logSync.textContent = results.map(x => `${x.ok ? '✓' : '✗'} ${x.label}`).join('\n');
+
+        checklist.push(`${itemOk ? '✓' : '✗'} ${item.label}${attempts > 1 ? ` (${attempts} attempts)` : ''}`);
+        results.push({ label: item.label, ok: itemOk, output: itemNotes.join('\n') });
+        render();
       }
 
       // After push: restart remote server so it loads the new database
@@ -1223,6 +1295,7 @@
       let restartOut = '';
       if (direction === 'push') {
         setSyncProgress('↺ Restarting server…');
+        render('↺ Restarting server…');
         try {
           const r = await apiFetch('/admin/deploy/ssh-run', {
             method:  'POST',
@@ -1242,10 +1315,7 @@
       const allOk = results.every(x => x.ok) && (restartOk === null || restartOk);
       const summary = results.map(x => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ') +
         (restartOk !== null ? ` — server ${restartOk ? 'restarted' : 'restart failed'}` : '');
-      const stdout = results.map(x => {
-        const parts = [x.output, x.err].filter(Boolean).join('\n').trim();
-        return `[${x.label}]\n${parts || '(no output)'}`;
-      }).join('\n\n') +
+      const stdout = results.map(x => `[${x.label}]\n${x.output || '(no issues)'}`).join('\n\n') +
         (restartOk !== null ? `\n\n[Server restart]\n${restartOut || '(no output)'}` : '');
 
       showLog(logSync, allOk, `${label}: ${summary}`, stdout);
@@ -1297,17 +1367,33 @@
             b.addEventListener('click', async () => {
               const itemId    = b.dataset.itemId;
               const direction = b.classList.contains('rs-diff-push') ? 'push' : 'pull';
+              const verb      = direction === 'push' ? 'Pushing' : 'Pulling';
               b.disabled = true;
+              let finalOk = false;
+              let finalDetail = null;
               try {
-                const r2 = await apiFetch('/admin/deploy/sync-item', {
-                  method:  'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body:    JSON.stringify({ itemId, direction }),
+                await streamNdjson('/admin/deploy/sync-item', { itemId, direction }, (ev) => {
+                  if (ev.stage === 'transfer') {
+                    b.textContent = ev.attempt > 1 ? `${verb}… (attempt ${ev.attempt}/${ev.maxAttempts})` : `${verb}…`;
+                  } else if (ev.stage === 'verify') {
+                    b.textContent = 'Verifying…';
+                  } else if (ev.stage === 'retrying') {
+                    b.textContent = `Retrying (${ev.nextAttempt}/${ev.maxAttempts})…`;
+                  } else if (ev.done) {
+                    finalOk = ev.ok;
+                    finalDetail = ev.detail;
+                  }
                 });
-                b.closest('.rs-diff-item').style.opacity = '0.45';
-                b.innerHTML = r2.ok !== false ? (direction === 'push' ? '&#x2191; Pushed' : '&#x2193; Pulled') : '&#x2717; Failed';
               } catch (err) {
-                b.textContent = '&#x2717; Error';
+                finalDetail = { message: err.message };
+              }
+              if (finalOk) {
+                b.closest('.rs-diff-item').style.opacity = '0.45';
+                b.innerHTML = direction === 'push' ? '&#x2191; Pushed &amp; verified' : '&#x2193; Pulled &amp; verified';
+              } else {
+                const missingCount = finalDetail && finalDetail.missing ? finalDetail.missing.length : 0;
+                b.textContent = missingCount ? `✗ ${missingCount} file(s) still missing` : '✗ Failed — see server';
+                b.disabled = false;
               }
             });
           });

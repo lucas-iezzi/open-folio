@@ -217,7 +217,7 @@ sudo systemctl reload caddy
 
 **Content sync:** All push/pull uses `scp` (bundled with OpenSSH — always available alongside `ssh`). No rsync dependency. Key endpoints:
 - `POST /admin/deploy/sync` — full push or pull (DB + all image dirs)
-- `POST /admin/deploy/sync-item` — single item push or pull (db | images/logos | images/projects)
+- `POST /admin/deploy/sync-item` — single item push or pull (db | images/logos | images/projects[/slug]). Streams NDJSON progress (`transfer` → `verify` → `verify-done`/`retrying` → `done`). After the scp transfer it re-lists the item's files locally and remotely (`listLocalTree`/`listRemoteTree`) and compares sizes; if anything doesn't match it retries the whole transfer, up to `SYNC_MAX_ATTEMPTS` (3) times, before reporting failure with the exact list of still-mismatched files in `detail.missing`. This exists because trusting scp's exit code alone previously let some images silently fail to land on the server.
 - `POST /admin/deploy/compare` — read-only; diffs local vs remote per-file (DB by size, images by exact path + size via SSH `find`). Called automatically 1.5 s after each admin panel open (throttled to once per 2 min per browser tab via `sessionStorage`); if anything differs, `admin.js` shows a dismissible banner (`.of-sync-banner`) with Push/Pull/Review buttons — nothing syncs without an explicit click. There is no automatic pulling; a prior file-count-based auto-pull heuristic was removed because matching totals could mask per-project mismatches (root cause of images going missing on the live site).
 
 ## REST API

@@ -2772,6 +2772,7 @@ details.rs-inner-card[open] > .rs-inner-summary::after { transform: rotate(180de
   border-radius: 7px;
   font-size: .82rem;
   line-height: 1.5;
+  white-space: pre-wrap;
 }
 .rs-log--ok  { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
 .rs-log--err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }

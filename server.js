@@ -1741,6 +1741,70 @@ function scpRun(src, dest, sshPort = 22, isDir = false, timeoutMs = 120000) {
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
 
+// Async (non-blocking) counterparts of sshExec/scpRun, used by the streaming sync-item
+// route below so it can report progress while a transfer is still in flight instead of
+// blocking the whole request until scp exits.
+function sshExecAsync(cfg, command, timeoutMs = 60000) {
+  const { host, user, sshPort = 22 } = cfg;
+  const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
+  if (Number(sshPort) !== 22) args.push('-p', String(sshPort));
+  args.push(`${user}@${host}`, command);
+  return new Promise((resolve) => {
+    const proc = spawn('ssh', args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: __dirname });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => proc.kill(), timeoutMs);
+    proc.stdout.on('data', (c) => { stdout += c; });
+    proc.stderr.on('data', (c) => { stderr += c; });
+    proc.on('close', (code) => { clearTimeout(timer); resolve({ ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), err: null }); });
+    proc.on('error', (err) => { clearTimeout(timer); resolve({ ok: false, stdout: stdout.trim(), stderr: stderr.trim(), err: err.message }); });
+  });
+}
+
+function scpRunAsync(src, dest, sshPort = 22, isDir = false, timeoutMs = 120000) {
+  const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes'];
+  if (isDir) args.push('-r');
+  if (Number(sshPort) !== 22) args.push('-P', String(sshPort));
+  args.push(src, dest);
+  return new Promise((resolve) => {
+    const proc = spawn('scp', args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: __dirname });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => proc.kill(), timeoutMs);
+    proc.stdout.on('data', (c) => { stdout += c; });
+    proc.stderr.on('data', (c) => { stderr += c; });
+    proc.on('close', (code) => { clearTimeout(timer); resolve({ ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), err: null }); });
+    proc.on('error', (err) => { clearTimeout(timer); resolve({ ok: false, stdout: stdout.trim(), stderr: stderr.trim(), err: err.message }); });
+  });
+}
+
+// Recursively lists files under a local directory as relPath -> size. Shared by the
+// Compare endpoint and the sync-item verification step.
+function listLocalTree(dir) {
+  const out = new Map();
+  if (!fs.existsSync(dir)) return out;
+  (function walk(d, base) {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const rel = base ? `${base}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(d, entry.name), rel);
+      else out.set(rel, fs.statSync(path.join(d, entry.name)).size);
+    }
+  })(dir, '');
+  return out;
+}
+
+// Same, but for a directory on the remote server (relPath -> size), via a single SSH `find`.
+async function listRemoteTree(srv, remoteDir, timeoutMs = 60000) {
+  const out = new Map();
+  const r = await sshExecAsync(srv, `find "${remoteDir}" -type f -printf '%P\t%s\n' 2>/dev/null | sort`, timeoutMs);
+  if (!r.ok) return out;
+  for (const line of r.stdout.split('\n')) {
+    const tab = line.lastIndexOf('\t');
+    if (tab < 0) continue;
+    const relPath = line.slice(0, tab).replace(/\\/g, '/').trim();
+    if (relPath) out.set(relPath, parseInt(line.slice(tab + 1), 10) || 0);
+  }
+  return out;
+}
+
 function shEsc(s) { return String(s).replace(/'/g, "'\\''"); }
 // Expand leading ~ to $HOME so the remote bash shell resolves it correctly.
 // Single-quoted paths suppress tilde expansion; double-quoting with $HOME works.
@@ -2135,17 +2199,7 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
     if (relPath) remoteFiles.set(relPath, size);
   }
 
-  function walkLocal(dir, base) {
-    if (!fs.existsSync(dir)) return [];
-    const out = [];
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const rel = base ? `${base}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) out.push(...walkLocal(path.join(dir, entry.name), rel));
-      else out.push({ path: rel, size: fs.statSync(path.join(dir, entry.name)).size });
-    }
-    return out;
-  }
-  const localFiles = new Map(walkLocal(localImgBase, '').map(f => [f.path, f.size]));
+  const localFiles = listLocalTree(localImgBase);
 
   function groupOf(relPath) {
     const parts = relPath.split('/');
@@ -2192,7 +2246,16 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
   res.json({ ok: true, items });
 });
 
-app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, (req, res) => {
+// Pushes/pulls a single item (db | images/logos | images/projects[/slug]), then verifies
+// the transfer by diffing local vs remote file listings and retries (re-running scp, not
+// just re-checking) up to SYNC_MAX_ATTEMPTS times until every file actually matches.
+// Streams NDJSON progress lines so the UI can show what's happening in real time instead
+// of just a spinner — this is what previously made "successful" pushes silently drop a
+// handful of images: scp exiting 0 was trusted as proof the files arrived, with no check
+// that they actually had.
+const SYNC_MAX_ATTEMPTS = 3;
+
+app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, async (req, res) => {
   const { itemId, direction } = req.body;
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
   if (!itemId || typeof itemId !== 'string') return res.status(400).json({ error: 'itemId required.' });
@@ -2200,22 +2263,66 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, (req
 
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
-  const { host, user, sshPort = 22, remotePath = '~/open-folio' } = srv;
-  const remote = `${user}@${host}`;
+  const { sshPort = 22, remotePath = '~/open-folio' } = srv;
+  const remote = `${srv.user}@${srv.host}`;
+  const erp    = xrp(remotePath);
+  const isDb   = itemId === 'db';
+  const rel    = isDb ? null : itemId.replace(/^images\//, '');
 
-  let result;
-  if (itemId === 'db') {
-    result = direction === 'push'
-      ? scpRun('data/portfolio.db', `${remote}:${remotePath}/data/`, sshPort, false, 60000)
-      : scpRun(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000);
-  } else {
-    const rel = itemId.replace(/^images\//, '');
-    result = direction === 'push'
-      ? scpRun(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
-      : scpRun(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000);
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.flushHeaders();
+  const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch {} };
+
+  let ok = false;
+  let detail = null;
+
+  for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+    send({ stage: 'transfer', attempt, maxAttempts: SYNC_MAX_ATTEMPTS });
+
+    const transfer = isDb
+      ? (direction === 'push'
+          ? await scpRunAsync('data/portfolio.db', `${remote}:${remotePath}/data/`, sshPort, false, 60000)
+          : await scpRunAsync(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000))
+      : (direction === 'push'
+          ? await scpRunAsync(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
+          : await scpRunAsync(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000));
+
+    if (!transfer.ok) {
+      detail = { reason: 'transfer', message: transfer.stderr || transfer.err || 'scp exited with an error' };
+      send({ stage: 'transfer-failed', attempt, detail });
+    } else {
+      send({ stage: 'verify', attempt });
+
+      if (isDb) {
+        const localPath  = path.join(__dirname, 'data', 'portfolio.db');
+        const localSize  = fs.existsSync(localPath) ? fs.statSync(localPath).size : -1;
+        const remoteStat = await sshExecAsync(srv, `stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo -1`, 20000);
+        const remoteSize = parseInt((remoteStat.stdout || '').trim(), 10);
+        ok     = localSize >= 0 && remoteSize >= 0 && localSize === remoteSize;
+        detail = { reason: 'verify', localSize, remoteSize };
+      } else {
+        const localMap  = listLocalTree(path.join(__dirname, 'public', 'images', rel));
+        const remoteMap = await listRemoteTree(srv, `${erp}/public/images/${rel}`, 60000);
+        const missing   = [];
+        if (direction === 'push') {
+          for (const [f, size] of localMap)  if (remoteMap.get(f) !== size) missing.push(f);
+        } else {
+          for (const [f, size] of remoteMap) if (localMap.get(f) !== size) missing.push(f);
+        }
+        ok     = missing.length === 0;
+        detail = { reason: 'verify', missing, totalChecked: direction === 'push' ? localMap.size : remoteMap.size };
+      }
+
+      send({ stage: 'verify-done', attempt, ok, detail });
+    }
+
+    if (ok) break;
+    if (attempt < SYNC_MAX_ATTEMPTS) send({ stage: 'retrying', nextAttempt: attempt + 1, maxAttempts: SYNC_MAX_ATTEMPTS });
   }
 
-  res.json({ ok: result.ok, output: [result.stdout, result.stderr, result.err].filter(Boolean).join('\n'), err: result.err });
+  send({ done: true, ok, detail });
+  res.end();
 });
 
 app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, res) => {
