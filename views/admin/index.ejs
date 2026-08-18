@@ -804,12 +804,12 @@ pm2 save && pm2 startup</pre>
                 <div class="rs-step-panel" data-step="10" data-cmd="caddy_configure" data-needs-domain="true">
                   <div class="rs-sp-head"><span class="rs-step-num">11</span><span class="rs-sp-title">Configure Caddy with your domain</span></div>
                   <div class="rs-sp-body">
-                    <p>Enter your domain name below. Clicking <strong>Run on server</strong> will write the Caddy config and reload the web server. Caddy will automatically fetch an HTTPS certificate once DNS is pointing to your server.</p>
+                    <p>Enter your domain name(s) below. Clicking <strong>Run on server</strong> will write the Caddy config and reload the web server. Caddy will automatically fetch an HTTPS certificate once DNS is pointing to your server.</p>
                     <div class="rs-field" style="margin-top:.75rem;max-width:360px">
-                      <label class="rs-label">Your domain</label>
-                      <input id="rs-domain-input" type="text" class="rs-input" placeholder="yourdomain.com" spellcheck="false">
+                      <label class="rs-label">Your domain(s)</label>
+                      <input id="rs-domain-input" type="text" class="rs-input" placeholder="yourdomain.com, otherdomain.com" spellcheck="false">
                     </div>
-                    <p style="margin-top:.75rem;font-size:.8rem">Do not include <code>https://</code> — just the bare domain (e.g. <code>myportfolio.com</code>). You can also use a subdomain like <code>www.myportfolio.com</code>.</p>
+                    <p style="margin-top:.75rem;font-size:.8rem">Enter just the bare domain — no <code>https://</code> and no <code>www.</code> (e.g. <code>myportfolio.com</code>). The <code>www.</code> version is added automatically. To point multiple domains at this site, separate them with commas (e.g. <code>myportfolio.com, myotherportfolio.com</code>) — each one gets its own <code>www.</code> variant too.</p>
                   </div>
                 </div>
 
@@ -833,7 +833,7 @@ TTL:   Auto or 3600</pre>
               <div class="rs-carousel-nav">
                 <button id="rs-prev-step" class="btn btn-secondary btn-sm" disabled>← Previous</button>
                 <button id="rs-carousel-run" class="btn btn-primary btn-sm" style="display:none">Run on server</button>
-                <button id="rs-manual-done-nav" class="btn btn-primary btn-sm" style="display:none">✓ Done — continue</button>
+                <button id="rs-manual-done-nav" class="btn btn-primary btn-sm" style="display:none">✓ Mark step done</button>
                 <span id="rs-step-status" class="rs-run-status"></span>
                 <button id="rs-next-step" class="btn btn-secondary btn-sm">Next →</button>
               </div>
@@ -843,7 +843,7 @@ TTL:   Auto or 3600</pre>
           </details>
 
           <!-- ── 3. Content Sync ── -->
-          <details class="rs-card">
+          <details class="rs-card" id="rs-sync-card">
             <summary class="rs-card-summary">
               <span class="rs-card-title">Content Sync</span>
               <span class="rs-card-subtitle">Push and pull database, images, and styles</span>

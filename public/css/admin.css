@@ -2735,6 +2735,35 @@ details.rs-inner-card[open] > .rs-inner-summary::after { transform: rotate(180de
 .rs-diff-item-label { font-size: .875rem; font-weight: 600; color: var(--text); }
 .rs-diff-item-hint  { font-size: .78rem;  color: var(--muted); margin-top: 1px; }
 .rs-diff-actions    { display: flex; gap: .4rem; flex-shrink: 0; }
+/* ── Local/server content-mismatch banner (shown once per tab when Compare finds differences) ── */
+.of-sync-banner {
+  position: sticky;
+  top: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: .65rem 1.25rem;
+  background: #fff3e0;
+  border-bottom: 1px solid #ffb74d;
+  color: #7a4a00;
+  font-size: .85rem;
+}
+.of-sync-banner-text { flex: 1; min-width: 220px; }
+.of-sync-banner-actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+.of-sync-banner-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0 0 0 .25rem;
+  color: #7a4a00;
+  opacity: .6;
+}
+.of-sync-banner-dismiss:hover { opacity: 1; }
 /* -- Per-card inline log -- */
 .rs-log {
   display: none;

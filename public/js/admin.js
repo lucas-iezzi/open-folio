@@ -1069,7 +1069,10 @@
       if (logSetup) logSetup.style.display = 'none';
     }
 
-    if (manualDoneNav) manualDoneNav.addEventListener('click', () => goToStep(currentStep + 1));
+    if (manualDoneNav) manualDoneNav.addEventListener('click', () => {
+      if (stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
+      if (stepStatus) { stepStatus.textContent = '✓ Marked done'; stepStatus.style.color = 'var(--success,#2d8a4e)'; }
+    });
 
     if (prevBtn) prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
     if (nextBtn) nextBtn.addEventListener('click', () => goToStep(currentStep + 1));
@@ -1319,6 +1322,75 @@
     if (comparePanel)   comparePanel.addEventListener('toggle', () => { if (comparePanel.open) runCompare(); });
     if (compareRefresh) compareRefresh.addEventListener('click', runCompare);
 
+    // ── Sync mismatch banner ──
+    // On admin panel open, silently compares local vs server (read-only — no files are
+    // touched) and, if anything differs, shows a dismissible banner with sync buttons.
+    // Deliberately does NOT auto-pull: a prior heuristic used total file counts to decide
+    // whether to pull images, which could miss per-project mismatches when counts matched
+    // even though the actual files differed — that's how images silently went missing on
+    // the live site. The exact per-file Compare check below can't make that mistake.
+    function showSyncBanner(items) {
+      if (document.getElementById('of-sync-banner')) return;
+      const counts = { push: 0, pull: 0, both: 0 };
+      items.forEach(i => { counts[i.direction || 'both']++; });
+      const parts = [];
+      if (counts.push) parts.push(`${counts.push} local-only`);
+      if (counts.pull) parts.push(`${counts.pull} server-only`);
+      if (counts.both) parts.push(`${counts.both} differing`);
+
+      const banner = document.createElement('div');
+      banner.id = 'of-sync-banner';
+      banner.className = 'of-sync-banner';
+      banner.innerHTML =
+        `<span class="of-sync-banner-text"><strong>Local and server content are out of sync</strong> — ${escHtml(parts.join(', '))}.</span>` +
+        `<span class="of-sync-banner-actions">` +
+          `<button type="button" class="btn btn-primary btn-sm" id="of-sync-push">&#x2191; Push local to server</button>` +
+          `<button type="button" class="btn btn-secondary btn-sm" id="of-sync-pull">&#x2193; Pull server to local</button>` +
+          `<button type="button" class="btn btn-secondary btn-sm" id="of-sync-review">Review details</button>` +
+          `<button type="button" class="of-sync-banner-dismiss" aria-label="Dismiss">&times;</button>` +
+        `</span>`;
+      document.body.insertBefore(banner, document.body.firstChild);
+
+      banner.querySelector('.of-sync-banner-dismiss').addEventListener('click', () => banner.remove());
+      document.getElementById('of-sync-push').addEventListener('click', async () => {
+        banner.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        await runSync('push', 'Push to server');
+        banner.remove();
+      });
+      document.getElementById('of-sync-pull').addEventListener('click', async () => {
+        banner.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        await runSync('pull', 'Pull from server');
+        banner.remove();
+      });
+      document.getElementById('of-sync-review').addEventListener('click', () => {
+        banner.remove();
+        const deployTabBtn = document.querySelector('.admin-tab[data-tab="deploy"]');
+        if (deployTabBtn) deployTabBtn.click();
+        const syncCard = document.getElementById('rs-sync-card');
+        if (syncCard) syncCard.open = true;
+        if (comparePanel) {
+          comparePanel.open = true;
+          runCompare();
+          setTimeout(() => comparePanel.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+        }
+      });
+    }
+
+    (function initSyncBanner() {
+      const SESSION_KEY = 'ofSyncCheckTs';
+      const last = parseInt(sessionStorage.getItem(SESSION_KEY) || '0');
+      if (Date.now() - last < 120000) return; // at most once every 2 minutes per tab
+
+      setTimeout(async function () {
+        sessionStorage.setItem(SESSION_KEY, String(Date.now()));
+        try {
+          const r = await apiFetch('/admin/deploy/compare', { method: 'POST' });
+          if (!r.ok || !r.items || r.items.length === 0) return;
+          showSyncBanner(r.items);
+        } catch (_) { /* silent — no server configured or SSH unavailable */ }
+      }, 1500);
+    })();
+
     // ── SSH Key Setup ──
     const sshKeyDetails = document.getElementById('rs-ssh-key-details');
     let sshKeyLoaded = false;
@@ -1449,48 +1521,6 @@
         });
       });
     }
-  })();
-
-  // ── Auto-pull from server when admin panel opens ────────────────
-  (function initAutoPull() {
-    const SESSION_KEY = 'ofAutoPullTs';
-    const last = parseInt(sessionStorage.getItem(SESSION_KEY) || '0');
-    if (Date.now() - last < 120000) return; // at most once every 2 minutes per tab
-
-    setTimeout(async function () {
-      sessionStorage.setItem(SESSION_KEY, String(Date.now()));
-      try {
-        const r = await apiFetch('/admin/deploy/auto-pull', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        if (!r.pulled || r.pulled.length === 0) return;
-
-        const needsRestart = r.pulled.some(function (x) { return x.needsRestart; });
-        const labels = r.pulled.map(function (x) { return x.label; }).join(', ');
-
-        const toast = document.createElement('div');
-        toast.setAttribute('role', 'status');
-        toast.style.cssText =
-          'position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;max-width:380px;' +
-          'background:var(--success-bg,#eaf7f0);color:var(--success,#1a7a46);' +
-          'border:1px solid #b2dfc4;border-radius:8px;padding:12px 14px;font-size:13px;' +
-          'box-shadow:0 4px 16px rgba(0,0,0,.12);display:flex;align-items:flex-start;gap:.75rem;';
-        toast.innerHTML =
-          '<span style="flex:1">' +
-            '<strong>&#8595; Auto-synced from server:</strong> ' + esc(labels) + '.' +
-            (needsRestart
-              ? '<br><span style="opacity:.75;font-size:.9em">Database updated — restart the server to apply changes.</span>'
-              : '') +
-          '</span>' +
-          '<button onclick="this.parentElement.parentElement.remove()" ' +
-            'style="background:none;border:none;cursor:pointer;font-size:1.2rem;' +
-            'line-height:1;padding:0;opacity:.5;flex-shrink:0;" aria-label="Dismiss">&times;</button>';
-        document.body.appendChild(toast);
-        setTimeout(function () { if (toast.parentNode) toast.remove(); }, 9000);
-      } catch (_) { /* silent — no server configured or SSH unavailable */ }
-    }, 1500);
   })();
 
 })();

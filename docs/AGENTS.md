@@ -218,7 +218,7 @@ sudo systemctl reload caddy
 **Content sync:** All push/pull uses `scp` (bundled with OpenSSH — always available alongside `ssh`). No rsync dependency. Key endpoints:
 - `POST /admin/deploy/sync` — full push or pull (DB + all image dirs)
 - `POST /admin/deploy/sync-item` — single item push or pull (db | images/logos | images/projects)
-- `POST /admin/deploy/auto-pull` — called automatically 1.5 s after each admin panel open; compares local vs remote file counts via a single SSH call; pulls missing images and DB (only if local is a fresh seed DB < 50% of remote size); throttled to once per 30 s server-side and once per 2 min per browser tab via `sessionStorage`.
+- `POST /admin/deploy/compare` — read-only; diffs local vs remote per-file (DB by size, images by exact path + size via SSH `find`). Called automatically 1.5 s after each admin panel open (throttled to once per 2 min per browser tab via `sessionStorage`); if anything differs, `admin.js` shows a dismissible banner (`.of-sync-banner`) with Push/Pull/Review buttons — nothing syncs without an explicit click. There is no automatic pulling; a prior file-count-based auto-pull heuristic was removed because matching totals could mask per-project mismatches (root cause of images going missing on the live site).
 
 ## REST API
 

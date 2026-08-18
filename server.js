@@ -1192,6 +1192,21 @@ Respond with ONLY valid JSON:
   "explanation": null
 }`;
 
+// Reads the project's own docs/ files so the deploy assistant can answer questions about
+// the codebase and architecture, not just the hardcoded deployment cheat-sheet below.
+// These files are the same ones tracked in the open-folio GitHub repo, so reading them
+// locally is equivalent to fetching the current docs/code from GitHub.
+function getDeployDocsContext() {
+  const files = ['docs/AGENTS.md', 'docs/DEPLOYMENT.md', 'docs/FEATURES.md'];
+  const parts = [];
+  for (const rel of files) {
+    try {
+      parts.push(`### ${rel}\n${fs.readFileSync(path.join(__dirname, rel), 'utf8')}`);
+    } catch { /* file missing — skip */ }
+  }
+  return parts.join('\n\n');
+}
+
 function getDeploySystemPrompt() {
   const srv = readServerConfig().server || {};
   const host       = srv.host       || '(not configured)';
@@ -1231,9 +1246,10 @@ REMOTE SERVER TAB — what the user sees and can do:
    Step 8:  Install dependencies — cd ${remotePath} && npm install --omit=dev
    Step 9:  First-time server setup — runs scripts/setup.js to create .env + admin password (requires password input)
    Step 10: Start with PM2 — pm2 start scripts/ecosystem.config.js --env production && pm2 save
-   Step 11: Configure Caddy — writes Caddyfile with the user's domain → reverse_proxy localhost:3000
+   Step 11: Configure Caddy — user enters one or more bare domains, comma-separated (e.g. "foo.com, bar.com"); each gets its own www. variant added automatically, and Caddyfile is written with all addresses on one reverse_proxy localhost:3000 block
    Step 12: Point DNS (manual — A record at registrar pointing to server IP)
-4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows diff), Backup (downloads everything). Auto-pull runs silently on each admin panel open.
+   Note: Steps 1 and 12 are manual (no SSH command) — their "Mark step done" button only turns the step bubble green; it does not auto-advance the carousel, so the user reviews the instructions at their own pace.
+4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows exact per-file diff, read-only), Backup (downloads everything). On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with "Push to server" / "Pull from server" / "Review details" buttons — nothing is synced automatically without the user clicking one of those.
 5. Server Commands (one-click buttons that run over SSH):
    - Restart site: pm2 restart open-folio
    - View logs: pm2 logs open-folio --lines 80
@@ -1300,7 +1316,11 @@ Be concise, encouraging, and give exact copy-paste commands. When referencing se
 SSH COMMAND TOOL:
 You can run commands directly on the user's server to help diagnose or fix problems. When you want to run a command, include this marker anywhere in your response (on its own line):
 [SSH_CMD: <command>]
-The user will be shown the command and asked to confirm before it runs. You will automatically receive the output. Prefer read-only commands (pm2 status, cat, ls, systemctl status, df, free, journalctl) unless a write is genuinely needed to fix the issue. Only request one command per message.`;
+The user will be shown the command and asked to confirm before it runs. You will automatically receive the output. Prefer read-only commands (pm2 status, cat, ls, systemctl status, df, free, journalctl) unless a write is genuinely needed to fix the issue. Only request one command per message.
+
+REFERENCE DOCUMENTATION (full contents of this repo's docs/ directory — the same files tracked in the open-folio GitHub repo — use these to answer any question about routes, database schema, features, or how the codebase is put together, not just deployment):
+
+${getDeployDocsContext()}`;
 }
 
 // ── Build the first user message for the LLM — images as base64, text files as content blocks.
@@ -1739,10 +1759,49 @@ const SSH_CMDS = {
   git_clone:        (rp, url)      => `git clone '${shEsc(url)}' "${xrp(rp)}"`,
   ufw_setup:        ()             => 'sudo ufw allow 22 && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw --force enable && sudo ufw status',
   caddy_install:    ()             => "sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt update && sudo apt install caddy -y && sudo systemctl enable caddy && sudo systemctl start caddy && caddy version",
-  caddy_configure:  (rp, domain)   => `printf '${shEsc(domain)} {\\n  reverse_proxy localhost:3000\\n}\\n' | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy && sudo systemctl status caddy --no-pager`,
+  caddy_configure:  (rp, addresses) => `printf '${shEsc(addresses)} {\\n  reverse_proxy localhost:3000\\n}\\n' | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy && sudo systemctl status caddy --no-pager`,
   server_setup:     (rp, password) => `cd "${xrp(rp)}" && node scripts/setup.js --password='${shEsc(password)}'`,
   manage_password:  (rp, password) => `cd "${xrp(rp)}" && node manage.js --set-password='${shEsc(password)}' && pm2 restart open-folio`,
 };
+
+// Parses a comma-separated list of bare domains (e.g. "foo.com, bar.com") into
+// a deduped Caddy address list that includes both the bare and www. form of each.
+function parseDomains(raw) {
+  const parts = String(raw).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!parts.length) return { error: 'domain required for caddy_configure.' };
+  const hostRe = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
+  const addresses = [];
+  const seen = new Set();
+  for (let d of parts) {
+    d = d.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+    if (!hostRe.test(d)) return { error: `Invalid domain: "${d}"` };
+    for (const addr of [d, `www.${d}`]) {
+      if (!seen.has(addr)) { seen.add(addr); addresses.push(addr); }
+    }
+  }
+  return { addresses };
+}
+
+// Builds the SSH command for a setup-carousel step, shared by ssh-run and
+// ssh-run-stream so the git_clone/caddy_configure/password validation logic
+// lives in exactly one place.
+function resolveSshCommand(command, rp, { repoUrl, domain, password } = {}) {
+  if (command === 'git_clone') {
+    if (!repoUrl || !repoUrl.trim()) return { error: 'repoUrl required for git_clone.' };
+    return { cmd: SSH_CMDS.git_clone(rp, repoUrl.trim()) };
+  }
+  if (command === 'caddy_configure') {
+    if (!domain || !domain.trim()) return { error: 'domain required for caddy_configure.' };
+    const { addresses, error } = parseDomains(domain);
+    if (error) return { error };
+    return { cmd: SSH_CMDS.caddy_configure(rp, addresses.join(', ')) };
+  }
+  if (command === 'server_setup' || command === 'manage_password') {
+    if (!password || String(password).length < 10) return { error: 'Password must be at least 10 characters.' };
+    return { cmd: SSH_CMDS[command](rp, String(password)) };
+  }
+  return { cmd: SSH_CMDS[command](rp) };
+}
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
 const EDITABLE_KEYS = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'AI_PROVIDER']);
@@ -1964,21 +2023,8 @@ app.post('/admin/deploy/ssh-run', requireAuth, requireCsrf, requireLocal, (req, 
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
   const rp = srv.remotePath || '~/open-folio';
-  let cmd;
-  if (command === 'git_clone') {
-    if (!repoUrl || !repoUrl.trim()) return res.status(400).json({ error: 'repoUrl required for git_clone.' });
-    cmd = SSH_CMDS.git_clone(rp, repoUrl.trim());
-  } else if (command === 'caddy_configure') {
-    if (!domain || !domain.trim()) return res.status(400).json({ error: 'domain required for caddy_configure.' });
-    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    if (!/^[a-z0-9][a-z0-9\-\.]*\.[a-z]{2,}$/.test(cleanDomain)) return res.status(400).json({ error: 'Invalid domain format.' });
-    cmd = SSH_CMDS.caddy_configure(rp, cleanDomain);
-  } else if (command === 'server_setup' || command === 'manage_password') {
-    if (!password || String(password).length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters.' });
-    cmd = SSH_CMDS[command](rp, String(password));
-  } else {
-    cmd = SSH_CMDS[command](rp);
-  }
+  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password });
+  if (error) return res.status(400).json({ error });
   const slowCmds = new Set(['apt_update', 'node_install', 'caddy_install', 'server_setup']);
   const timeout = slowCmds.has(command) ? 180000 : 60000;
   const result = sshExec(srv, cmd, timeout);
@@ -1992,21 +2038,8 @@ app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal,
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
   const rp = srv.remotePath || '~/open-folio';
-  let cmd;
-  if (command === 'git_clone') {
-    if (!repoUrl || !repoUrl.trim()) return res.status(400).json({ error: 'repoUrl required for git_clone.' });
-    cmd = SSH_CMDS.git_clone(rp, repoUrl.trim());
-  } else if (command === 'caddy_configure') {
-    if (!domain || !domain.trim()) return res.status(400).json({ error: 'domain required for caddy_configure.' });
-    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    if (!/^[a-z0-9][a-z0-9\-\.]*\.[a-z]{2,}$/.test(cleanDomain)) return res.status(400).json({ error: 'Invalid domain format.' });
-    cmd = SSH_CMDS.caddy_configure(rp, cleanDomain);
-  } else if (command === 'server_setup' || command === 'manage_password') {
-    if (!password || String(password).length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters.' });
-    cmd = SSH_CMDS[command](rp, String(password));
-  } else {
-    cmd = SSH_CMDS[command](rp);
-  }
+  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password });
+  if (error) return res.status(400).json({ error });
 
   const { host, user, sshPort = 22 } = srv;
   const sshArgs = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
@@ -2157,79 +2190,6 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
   }
 
   res.json({ ok: true, items });
-});
-
-// Server-side cooldown — prevents the auto-pull check from running more than once per 30 s
-let _autoPullLastRun = 0;
-
-app.post('/admin/deploy/auto-pull', requireAuth, requireCsrf, requireLocal, (req, res) => {
-  const now = Date.now();
-  if (now - _autoPullLastRun < 30000) return res.json({ ok: true, pulled: [], skipped: 'cooldown' });
-  _autoPullLastRun = now;
-
-  const srv = readServerConfig().server;
-  if (!srv || !srv.host) return res.json({ ok: true, pulled: [] });
-
-  const { user, host, sshPort = 22, remotePath = '~/open-folio' } = srv;
-  const remote = `${user}@${host}`;
-  const erp = xrp(remotePath);
-
-  function countLocalFiles(dir) {
-    if (!fs.existsSync(dir)) return 0;
-    let n = 0;
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (e.isDirectory()) n += countLocalFiles(path.join(dir, e.name));
-      else if (e.name !== '.gitkeep') n++;
-    }
-    return n;
-  }
-
-  const localDbPath    = path.join(__dirname, 'data', 'portfolio.db');
-  const localDbExists  = fs.existsSync(localDbPath);
-  const localDbSize    = localDbExists ? fs.statSync(localDbPath).size : 0;
-  const localProjCount = countLocalFiles(path.join(__dirname, 'public', 'images', 'projects'));
-  const localLogoCount = countLocalFiles(path.join(__dirname, 'public', 'images', 'logos'));
-
-  // Single SSH call to gather all remote stats at once
-  const check = sshExec(srv,
-    `echo "db=$(stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo 0)"; ` +
-    `echo "proj=$(find "${erp}/public/images/projects" -type f ! -name .gitkeep 2>/dev/null | wc -l | tr -d ' ')"; ` +
-    `echo "logo=$(find "${erp}/public/images/logos" -type f ! -name .gitkeep 2>/dev/null | wc -l | tr -d ' ')"`,
-    30000
-  );
-
-  if (!check.ok) return res.json({ ok: true, pulled: [], reason: 'ssh-unavailable' });
-
-  function parseVal(key) {
-    const m = check.stdout.match(new RegExp(`^${key}=(\\d+)`, 'm'));
-    return m ? parseInt(m[1]) : 0;
-  }
-
-  const remoteDbSize    = parseVal('db');
-  const remoteProjCount = parseVal('proj');
-  const remoteLogoCount = parseVal('logo');
-
-  const pulled = [];
-
-  // Pull DB if local is missing or is a tiny seed DB (< 50% of server size).
-  // 8 KB threshold rules out non-existent (0) while allowing a freshly seeded schema.
-  if (remoteDbSize > 8192 && (!localDbExists || localDbSize < remoteDbSize * 0.5)) {
-    const r = scpRun(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000);
-    if (r.ok) pulled.push({ label: 'Database', needsRestart: true });
-  }
-
-  // Pull project/logo image directories when server has more files than local
-  if (remoteProjCount > localProjCount) {
-    const r = scpRun(`${remote}:${remotePath}/public/images/projects`, 'public/images/', sshPort, true, 300000);
-    if (r.ok) pulled.push({ label: 'Project images' });
-  }
-
-  if (remoteLogoCount > localLogoCount) {
-    const r = scpRun(`${remote}:${remotePath}/public/images/logos`, 'public/images/', sshPort, true, 60000);
-    if (r.ok) pulled.push({ label: 'Logo images' });
-  }
-
-  res.json({ ok: true, pulled });
 });
 
 app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, (req, res) => {
