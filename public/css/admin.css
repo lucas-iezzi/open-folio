@@ -2373,7 +2373,7 @@ details.rs-card[open] > .rs-card-summary { border-bottom: 1px solid var(--border
 }
 .rs-card-summary::after {
   content: '\25be';
-  font-size: .7rem;
+  font-size: 1.1rem;
   color: var(--muted);
   transition: transform .22s;
   display: inline-block;
@@ -2408,7 +2408,7 @@ details.rs-card[open] > .rs-card-summary::after { transform: rotate(180deg); }
 .rs-inner-summary:hover { background: rgba(0,0,0,.04); }
 .rs-inner-summary::after {
   content: '\25be';
-  font-size: .65rem;
+  font-size: 1.05rem;
   color: var(--muted);
   transition: transform .22s;
   display: inline-block;
@@ -2756,6 +2756,23 @@ details.rs-inner-card[open] > .rs-inner-summary::after { transform: rotate(180de
 .rs-diff-item-label { font-size: .875rem; font-weight: 600; color: var(--text); }
 .rs-diff-item-hint  { font-size: .78rem;  color: var(--muted); margin-top: 1px; }
 .rs-diff-actions    { display: flex; gap: .4rem; flex-shrink: 0; }
+/* Groups a project's DB row and image folder into one card, so a single project shows
+   up as one place to look instead of two disconnected rows. */
+.rs-diff-group {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .65rem .85rem;
+  margin-bottom: .45rem;
+}
+.rs-diff-group-header { margin-bottom: .5rem; }
+.rs-diff-group .rs-diff-item {
+  border: none;
+  border-left: 2px solid var(--border);
+  border-radius: 0;
+  padding: .3rem 0 .3rem .6rem;
+  margin-bottom: .3rem;
+}
+.rs-diff-group .rs-diff-item:last-child { margin-bottom: 0; }
 /* ── Local/server content-mismatch banner (shown once per tab when Compare finds differences) ── */
 .of-sync-banner {
   position: sticky;
@@ -2839,7 +2856,7 @@ details.rs-inner-card[open] > .rs-inner-summary::after { transform: rotate(180de
 .rs-sync-panel[open] > .rs-sync-panel-head { border-bottom: 1px solid var(--border); }
 .rs-sync-panel-head::after {
   content: '\25be';
-  font-size: .65rem;
+  font-size: 1.05rem;
   color: var(--muted);
   transition: transform .2s;
   margin-left: auto;

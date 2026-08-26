@@ -2500,8 +2500,19 @@ app.post('/admin/deploy/cleanup-orphans', requireAuth, requireCsrf, requireLocal
 // Streams NDJSON progress the whole way so the UI can show real-time status.
 const SYNC_MAX_ATTEMPTS = 3;
 
+// A flat timeout either kills large images too early (burning through all of
+// SYNC_MAX_ATTEMPTS on files that just needed more time, which is what made syncs look
+// "stuck" on the same image repeatedly) or leaves a genuinely dead transfer hanging too
+// long. Scale with file size (a generous ~150KB/s floor for a home connection, not a
+// datacenter link) and give later retry attempts more room in case the slowness was
+// transient congestion rather than a truly broken transfer.
+function fileTimeout(size, attempt = 1) {
+  const base = 20000 + Math.ceil(Math.max(0, size || 0) / 150000) * 1000;
+  return Math.min(180000, base) * attempt;
+}
+
 app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, async (req, res) => {
-  const { itemId, direction } = req.body;
+  const { itemId, direction, forcePerFile } = req.body;
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
   if (!itemId || typeof itemId !== 'string') return res.status(400).json({ error: 'itemId required.' });
   if (!/^(db|db-settings|db-project\/[a-z0-9][a-z0-9\-]*|images\/logos|images\/projects(\/[a-z0-9][a-z0-9\-]*)?)$/.test(itemId)) {
@@ -2570,15 +2581,19 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
     return res.end();
   }
 
-  // Retries a single transfer step up to SYNC_MAX_ATTEMPTS times. Used both for the
-  // whole-file DB transfer and for individual image files, so one bad file only costs
-  // its own retries instead of forcing a retry of everything else too.
+  // Retries a single transfer step up to SYNC_MAX_ATTEMPTS times, with a short backoff
+  // between attempts (transient network blips need a moment, not an instant re-hammer).
+  // Used both for the whole-file DB transfer and for individual image files, so one bad
+  // file only costs its own retries instead of forcing a retry of everything else too.
   async function withRetry(label, runOnce) {
     let result;
     for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
-      result = await runOnce();
+      result = await runOnce(attempt);
       if (result.ok) return { ok: true, attempts: attempt };
-      if (attempt < SYNC_MAX_ATTEMPTS) send({ stage: 'retrying', label, nextAttempt: attempt + 1, maxAttempts: SYNC_MAX_ATTEMPTS });
+      if (attempt < SYNC_MAX_ATTEMPTS) {
+        send({ stage: 'retrying', label, nextAttempt: attempt + 1, maxAttempts: SYNC_MAX_ATTEMPTS, error: result.stderr || result.err });
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
     }
     return { ok: false, attempts: SYNC_MAX_ATTEMPTS, error: result.stderr || result.err || 'transfer failed' };
   }
@@ -2653,14 +2668,23 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
   // slower and adds more points of failure than one recursive scp — use that for bulk
   // transfers (fresh server, big batch of new content) and fall back to per-file only
   // for the common steady-state case where just a handful of files actually changed.
-  const useBulk = dstTotal === 0 || toTransfer.length > 40 || (srcTotal > 0 && toTransfer.length / srcTotal >= 0.4);
+  // forcePerFile opts out of this (used by the setup wizard's initial content push) so
+  // the caller gets a progress event for every single file/project instead of one lump.
+  const useBulk = !forcePerFile && (dstTotal === 0 || toTransfer.length > 40 || (srcTotal > 0 && toTransfer.length / srcTotal >= 0.4));
   const failed = [];
 
   if (useBulk) {
+    // Bulk size unknown up front (it's a whole tree); use the largest single file as a
+    // floor so one big image doesn't blow the timeout for the whole recursive copy.
+    let bulkMaxFile = 0;
+    for (const size of (direction === 'push' ? localMap : remoteMap).values()) bulkMaxFile = Math.max(bulkMaxFile, size);
     send({ stage: 'transfer', mode: 'bulk', attempt: 1, maxAttempts: SYNC_MAX_ATTEMPTS });
-    const xfer = await withRetry(rel, () => direction === 'push'
-      ? scpRunAsync(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
-      : scpRunAsync(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000));
+    const xfer = await withRetry(rel, (attempt) => {
+      const timeout = Math.max(300000, fileTimeout(bulkMaxFile, attempt) * Math.min(toTransfer.length, 20));
+      return direction === 'push'
+        ? scpRunAsync(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, timeout)
+        : scpRunAsync(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, timeout);
+    });
     if (!xfer.ok) {
       send({ done: true, ok: false, detail: { reason: xfer.error } });
       return res.end();
@@ -2684,9 +2708,10 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
       const remoteFull = `${remote}:${remotePath}/public/images/${rel}/${f}`;
       if (direction === 'pull') fs.mkdirSync(path.dirname(localFull), { recursive: true });
 
-      const xfer = await withRetry(f, () => direction === 'push'
-        ? scpRunAsync(localFull, remoteFull, sshPort, false, 30000)
-        : scpRunAsync(remoteFull, localFull, sshPort, false, 30000));
+      const fileSize = direction === 'push' ? localMap.get(f) : remoteMap.get(f);
+      const xfer = await withRetry(f, (attempt) => direction === 'push'
+        ? scpRunAsync(localFull, remoteFull, sshPort, false, fileTimeout(fileSize, attempt))
+        : scpRunAsync(remoteFull, localFull, sshPort, false, fileTimeout(fileSize, attempt)));
 
       if (!xfer.ok) {
         failed.push({ file: f, error: xfer.error });

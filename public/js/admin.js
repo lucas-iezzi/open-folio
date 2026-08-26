@@ -1202,10 +1202,15 @@
     // machinery as the Content Sync tool, so its progress bar shows real per-file
     // completion instead of the simulated curve those opaque shell commands get.
     async function runInitialContentPush() {
+      // forcePerFile on the image items so a fresh/empty server (the common case here)
+      // doesn't take the one-shot bulk-copy path — the wizard needs a progress event per
+      // image (and, since paths are "slug/filename", per project too) not one lump transfer.
+      // Images push BEFORE the database — pushing the DB first would leave the server's
+      // copy referencing images that haven't landed yet if a transfer is slow or fails.
       const items = [
+        { id: 'images/projects', label: 'Project images', forcePerFile: true },
+        { id: 'images/logos',    label: 'Logo images',    forcePerFile: true },
         { id: 'db',              label: 'Database'       },
-        { id: 'images/projects', label: 'Project images' },
-        { id: 'images/logos',    label: 'Logo images'    },
       ];
       if (logSetup) { logSetup.style.display = 'block'; logSetup.className = 'rs-log rs-log--running'; logSetup.textContent = ''; }
       showStepProgressUI();
@@ -1219,13 +1224,22 @@
 
       const total = items.length;
       let allOk = true;
+      let imagesOk = true;
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
+        if (item.id === 'db' && !imagesOk) {
+          // Images didn't fully land — pushing the database now would point the server
+          // at files it doesn't have yet. Leave it for a rerun once images succeed.
+          checklist.push(`⏭ ${item.label} (skipped — images didn't finish syncing)`);
+          allOk = false;
+          render();
+          continue;
+        }
         const r = await syncItemWithProgress(item.id, item.label, 'push', render, (frac) => {
           setStepProgressPct(((i + frac) / total) * 100);
-        });
+        }, item.forcePerFile);
         checklist.push(`${r.ok ? '✓' : '✗'} ${item.label}${r.attempts > 1 ? ` (${r.attempts} attempts)` : ''}`);
-        if (!r.ok) allOk = false;
+        if (!r.ok) { allOk = false; if (item.id !== 'db') imagesOk = false; }
         render();
       }
 
@@ -1428,7 +1442,7 @@
     // here means the files are confirmed present, not just that scp exited 0. Streams
     // live progress into `render`, and reports fractional (0-1) completion for this one
     // item via `onProgress` so a caller syncing several items can show overall progress.
-    async function syncItemWithProgress(itemId, label, direction, render, onProgress) {
+    async function syncItemWithProgress(itemId, label, direction, render, onProgress, forcePerFile) {
       const icon = direction === 'push' ? '↑' : '↓';
       let itemOk = false;
       let attempts = 1;
@@ -1436,7 +1450,7 @@
       const report = (f) => { if (onProgress) onProgress(f); };
 
       try {
-        await streamNdjson('/admin/deploy/sync-item', { itemId, direction }, (ev) => {
+        await streamNdjson('/admin/deploy/sync-item', { itemId, direction, ...(forcePerFile ? { forcePerFile: true } : {}) }, (ev) => {
           let line = null;
           if (ev.stage === 'checking') {
             line = `🔍 ${label} — checking what's changed…`;
@@ -1526,6 +1540,18 @@
         if (direction === 'push' || direction === 'pull') plan.push({ id: item.id, label: item.label, direction });
       }
 
+      // A project's (or the settings') DB row references its images by path — syncing
+      // the row before the images land would leave whichever side just received it
+      // pointing at files that aren't there yet (a "broken reference"). Images always go
+      // first, in either direction, so a row is never written ahead of what it points to.
+      plan.sort((a, b) => (a.id.startsWith('images/') ? 0 : 1) - (b.id.startsWith('images/') ? 0 : 1));
+      function imageDepFor(id) {
+        const m = id.match(/^db-project\/(.+)$/);
+        if (m) return `images/projects/${m[1]}`;
+        if (id === 'db-settings') return 'images/logos';
+        return null;
+      }
+
       const checklist = [];
       function render(liveLine) {
         const text = checklist.concat(liveLine ? [liveLine] : []).join('\n');
@@ -1535,24 +1561,37 @@
       const total = plan.length || 1;
       setSyncProgressBar(0);
       const results = [];
+      const doneOk = {};
       for (let i = 0; i < plan.length; i++) {
         const item = plan[i];
+        const dep = imageDepFor(item.id);
+        if (dep && doneOk[dep] === false) {
+          // This project's (or the site's logo) images failed to sync this run — skip the
+          // DB row rather than have it reference images that didn't actually land.
+          checklist.push(`⏭ ${item.label} (skipped — its images didn't finish syncing)`);
+          results.push({ label: item.label, ok: false, output: 'Skipped: dependent image sync failed — fix that first, then sync again.' });
+          doneOk[item.id] = false;
+          render();
+          continue;
+        }
         const r = await syncItemWithProgress(item.id, item.label, item.direction, render, (frac) => {
           setSyncProgressBar(((i + frac) / total) * 100);
         });
+        doneOk[item.id] = r.ok;
         checklist.push(`${r.ok ? '✓' : '✗'} ${item.label}${r.attempts > 1 ? ` (${r.attempts} attempts)` : ''}`);
         results.push({ label: item.label, ok: r.ok, output: r.notes.join('\n') });
         render();
       }
       setSyncProgressBar(100);
 
-      // Only a whole-file db push needs a restart — the server's own open connection to
-      // that file gets orphaned when scp replaces it. Per-project/settings rows and image
-      // files are written in place (or served straight off disk), so they take effect
-      // immediately without one.
+      // Restart the server after any push so it comes back clean — a whole-file db push
+      // in particular orphans the running process's own open connection to that file when
+      // scp replaces it (per-project rows and images are written in place and technically
+      // don't need this), but restarting after every push is cheap and one less thing to
+      // second-guess. Pulls only change local data, so they don't need a remote restart.
       let restartOk = null;
       let restartOut = '';
-      if (plan.some((p) => p.direction === 'push' && p.id === 'db')) {
+      if (plan.some((p) => p.direction === 'push')) {
         setSyncProgress('↺ Restarting server…');
         render('↺ Restarting server…');
         try {
@@ -1611,29 +1650,65 @@
 
         let html = '';
 
+        // Renders one push/pull row for a single sync item — shared by both standalone
+        // cards (db, settings, logos) and rows nested inside a per-project group.
+        function diffItemRow(item, label) {
+          const dir = item.direction || 'both';
+          let actions = '';
+          if (dir === 'push') {
+            actions = `<button class="btn btn-primary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push to server</button>`;
+          } else if (dir === 'pull') {
+            actions = `<button class="btn btn-primary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull from server</button>`;
+          } else {
+            actions = `<button class="btn btn-secondary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push</button>
+                       <button class="btn btn-secondary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull</button>`;
+          }
+          return `<div class="rs-diff-item">
+            <div class="rs-diff-item-info">
+              <div class="rs-diff-item-label">${escHtml(label)}</div>
+              ${item.hint ? `<div class="rs-diff-item-hint">${escHtml(item.hint)}</div>` : ''}
+            </div>
+            <div class="rs-diff-actions">${actions}</div>
+          </div>`;
+        }
+
         if (!r.items || r.items.length === 0) {
           html += '<p class="rs-diff-clean">&#x2713; Everything is in sync.</p>';
         } else {
-          html += `<p class="rs-diff-header">${r.items.length} item${r.items.length === 1 ? '' : 's'} out of sync:</p>`;
+          // Group a project's DB row and its image folder into one card — the raw item
+          // list otherwise shows "wheelchair-lift" (data) and "wheelchair-lift" (images)
+          // as two disconnected rows instead of one place to see the whole project's state.
+          const groups = new Map();   // slug -> { title, items: [{...item, kind}] }
+          const standalone = [];
           for (const item of r.items) {
-            const dir = item.direction || 'both';
-            let actions = '';
-            if (dir === 'push') {
-              actions = `<button class="btn btn-primary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push to server</button>`;
-            } else if (dir === 'pull') {
-              actions = `<button class="btn btn-primary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull from server</button>`;
-            } else {
-              actions = `<button class="btn btn-secondary btn-sm rs-diff-push" data-item-id="${escHtml(item.id)}">&#x2191; Push</button>
-                         <button class="btn btn-secondary btn-sm rs-diff-pull" data-item-id="${escHtml(item.id)}">&#x2193; Pull</button>`;
-            }
-            html += `<div class="rs-diff-item">
-              <div class="rs-diff-item-info">
-                <div class="rs-diff-item-label">${escHtml(item.label)}</div>
-                ${item.hint ? `<div class="rs-diff-item-hint">${escHtml(item.hint)}</div>` : ''}
-              </div>
-              <div class="rs-diff-actions">${actions}</div>
-            </div>`;
+            const mData = item.id.match(/^db-project\/(.+)$/);
+            const mImg  = item.id.match(/^images\/projects\/(.+)$/);
+            const slug  = mData ? mData[1] : (mImg ? mImg[1] : null);
+            if (!slug) { standalone.push(item); continue; }
+            if (!groups.has(slug)) groups.set(slug, { title: null, items: [] });
+            const g = groups.get(slug);
+            g.items.push({ ...item, kind: mData ? 'data' : 'images' });
+            if (mData) g.title = item.label;
           }
+
+          const cardCount = groups.size + standalone.length;
+          html += `<p class="rs-diff-header">${cardCount} out of sync:</p>`;
+
+          for (const [slug, g] of groups) {
+            const dataItem = g.items.find(i => i.kind === 'data');
+            const imgItem  = g.items.find(i => i.kind === 'images');
+            const subtext  = [dataItem?.hint, imgItem?.hint].filter(Boolean).join(' &middot; ');
+            html += `<div class="rs-diff-group">
+              <div class="rs-diff-group-header">
+                <div class="rs-diff-item-label">${escHtml(g.title || slug)}</div>
+                ${subtext ? `<div class="rs-diff-item-hint">${subtext}</div>` : ''}
+              </div>`;
+            if (dataItem) html += diffItemRow(dataItem, 'Project data');
+            if (imgItem)  html += diffItemRow(imgItem, 'Images');
+            html += `</div>`;
+          }
+
+          for (const item of standalone) html += diffItemRow(item, item.label);
         }
 
         // ── Broken references — a project/logo points at a file that isn't actually
