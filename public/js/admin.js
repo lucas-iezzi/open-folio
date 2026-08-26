@@ -1161,6 +1161,7 @@
       if (manualDoneNav) manualDoneNav.style.display = isManual ? '' : 'none';
       if (stepStatus) stepStatus.textContent = '';
       if (logSetup) logSetup.style.display = 'none';
+      updateRunButtonState();
     }
 
     // Which steps are done lives on the remote server itself (a small JSON file next to
@@ -1177,6 +1178,17 @@
     function paintDoneSteps() {
       stepDots.forEach((dot, i) => dot.classList.toggle('rs-dot--done', doneSteps.has(i)));
       updateSetupCompleteBadge();
+      updateRunButtonState();
+    }
+    // Once a step's command has succeeded (or a manual step is marked done), its own
+    // run/done button stays disabled — only Prev/Next navigation can move off of it —
+    // so a stray click can't accidentally re-run a step that already succeeded.
+    function updateRunButtonState() {
+      const panel = stepPanels[currentStep];
+      if (!panel) return;
+      const isDone = doneSteps.has(currentStep);
+      if (carouselRun   && panel.dataset.cmd)               carouselRun.disabled   = isDone;
+      if (manualDoneNav && panel.dataset.manual === 'true') manualDoneNav.disabled = isDone;
     }
     function markStepDone(index) {
       doneSteps.add(index);
@@ -1287,7 +1299,7 @@
           try {
             await runInitialContentPush();
           } finally {
-            carouselRun.disabled = false;
+            updateRunButtonState();
             setNavDisabled(false);
           }
           return;
@@ -1336,7 +1348,7 @@
           if (stepStatus) { stepStatus.textContent = '✗ Failed'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
           showLog(logSetup, false, err.message);
         } finally {
-          carouselRun.disabled = false;
+          updateRunButtonState();
           setNavDisabled(false);
         }
       });
