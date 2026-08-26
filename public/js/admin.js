@@ -1040,6 +1040,7 @@
           if (rsConnHost) rsConnHost.textContent = cfg.host || 'Not configured';
           updateSshCmd(cfg);
           await testConnection(false);
+          loadSetupProgress(); // credentials may now point at a different (or freshly reset) server
         } catch (err) {
           rsCredsFB.textContent = err.message;
           rsCredsFB.style.color = 'var(--danger, #c0392b)';
@@ -1162,29 +1163,42 @@
       if (logSetup) logSetup.style.display = 'none';
     }
 
-    // Persists which steps are done in localStorage — so the green dots survive a page
-    // reload or restarting the local server, not just the current page session.
-    const RS_SETUP_STORAGE_KEY = 'ofSetupStepsDone';
-    function loadDoneSteps() {
-      try { return new Set(JSON.parse(localStorage.getItem(RS_SETUP_STORAGE_KEY) || '[]')); }
-      catch { return new Set(); }
-    }
+    // Which steps are done lives on the remote server itself (a small JSON file next to
+    // the app), not in the browser — localStorage kept showing every step as "done" even
+    // after the actual server was wiped and rebuilt, since nothing tied that state to a
+    // specific server instance. A fresh/reset server simply won't have the file yet.
+    let doneSteps = new Set();
     function updateSetupCompleteBadge() {
       const badge = document.getElementById('rs-setup-complete-badge');
       if (!badge) return;
-      const done = loadDoneSteps();
-      const allDone = stepPanels.length > 0 && stepPanels.every((_, i) => done.has(i));
+      const allDone = stepPanels.length > 0 && stepPanels.every((_, i) => doneSteps.has(i));
       badge.style.display = allDone ? '' : 'none';
     }
-    function markStepDone(index) {
-      if (stepDots[index]) stepDots[index].classList.add('rs-dot--done');
-      const done = loadDoneSteps();
-      done.add(index);
-      try { localStorage.setItem(RS_SETUP_STORAGE_KEY, JSON.stringify([...done])); } catch { /* storage unavailable — dots just won't persist */ }
+    function paintDoneSteps() {
+      stepDots.forEach((dot, i) => dot.classList.toggle('rs-dot--done', doneSteps.has(i)));
       updateSetupCompleteBadge();
     }
-    loadDoneSteps().forEach((i) => { if (stepDots[i]) stepDots[i].classList.add('rs-dot--done'); });
-    updateSetupCompleteBadge();
+    function markStepDone(index) {
+      doneSteps.add(index);
+      paintDoneSteps();
+      // Best-effort — if this fails (server unreachable right now), the dot still shows
+      // done for this page view, and the next load will just resync from the server.
+      apiFetch('/admin/deploy/mark-setup-step', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ step: index }),
+      }).catch(() => {});
+    }
+    async function loadSetupProgress() {
+      try {
+        const r = await apiFetch('/admin/deploy/setup-progress', { method: 'POST' });
+        if (r.ok && Array.isArray(r.steps)) {
+          doneSteps = new Set(r.steps);
+          paintDoneSteps();
+        }
+      } catch { /* server not configured yet, or unreachable right now */ }
+    }
+    loadSetupProgress();
 
     if (manualDoneNav) manualDoneNav.addEventListener('click', () => {
       markStepDone(currentStep);

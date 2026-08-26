@@ -2182,6 +2182,46 @@ app.post('/admin/deploy/clear-known-host', requireAuth, requireCsrf, requireLoca
   res.json({ ok: r.status === 0 || out.includes('not found'), output: out });
 });
 
+// ── Setup progress, stored on the remote itself ──────────────────────────────
+// The setup carousel's completed-step dots used to live only in the browser's
+// localStorage, which kept showing every step as "done" even after the actual
+// server was wiped and rebuilt — nothing tied that state to a specific server
+// instance. A small JSON file next to the app on the remote (gone the moment the
+// server is reset/redeployed fresh) is the source of truth instead.
+const SETUP_PROGRESS_FILE = '.setup-progress.json';
+
+// Returns the array of completed step indices, or null if the server couldn't be reached.
+function readSetupProgressRemote(srv, erp) {
+  const r = sshExec(srv, `cat "${erp}/${SETUP_PROGRESS_FILE}" 2>/dev/null || echo '[]'`, 15000);
+  if (!r.ok) return null;
+  try {
+    const steps = JSON.parse(r.stdout || '[]');
+    return Array.isArray(steps) ? steps.filter((n) => Number.isInteger(n) && n >= 0) : [];
+  } catch { return []; }
+}
+
+app.post('/admin/deploy/setup-progress', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.json({ ok: true, configured: false, steps: [] });
+  const erp = xrp(srv.remotePath || '~/open-folio');
+  const steps = readSetupProgressRemote(srv, erp);
+  if (steps === null) return res.json({ ok: false, configured: true, error: 'Could not reach server.', steps: [] });
+  res.json({ ok: true, configured: true, steps });
+});
+
+app.post('/admin/deploy/mark-setup-step', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const step = Number(req.body?.step);
+  if (!Number.isInteger(step) || step < 0 || step > 50) return res.status(400).json({ error: 'Invalid step.' });
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+  const erp = xrp(srv.remotePath || '~/open-folio');
+  const existing = readSetupProgressRemote(srv, erp) || [];
+  const steps = [...new Set([...existing, step])].sort((a, b) => a - b);
+  const w = sshExecWithStdin(srv, `mkdir -p "${erp}" && cat > "${erp}/${SETUP_PROGRESS_FILE}"`, JSON.stringify(steps), 15000);
+  if (!w.ok) return res.status(502).json({ error: w.stderr || w.err || 'Failed to save progress on the server.' });
+  res.json({ ok: true, steps });
+});
+
 app.get('/admin/deploy/local-pubkey', requireAuth, requireLocal, (req, res) => {
   const home    = os.homedir();
   const sshDir  = path.join(home, '.ssh');
