@@ -130,7 +130,7 @@ function banner() {
 function footer(running) {
   console.log();
   console.log(running
-    ? '  ' + C.dim + '[R]' + C.reset + ' restart   ' + C.dim + '[S]' + C.reset + ' stop   ' + C.dim + '[Q]' + C.reset + ' quit'
+    ? '  ' + C.dim + '[R]' + C.reset + ' restart   ' + C.dim + '[S]' + C.reset + ' stop   ' + C.dim + '[L]' + C.reset + ' launch admin   ' + C.dim + '[Q]' + C.reset + ' quit'
     : '  ' + C.dim + '[R]' + C.reset + ' start   ' + C.dim + '[Q]' + C.reset + ' quit');
 }
 
@@ -154,13 +154,15 @@ function printChecklist() {
 //               (user asked to restart — respawn immediately), 'quitting' (tearing
 //               down the whole wrapper — do nothing further), or null (still running
 //               normally, so an exit here is an actual crash)
-let child        = null;
-let intent       = null;
+let child         = null;
+let intent        = null;
 let openedBrowser = false;
+let currentPort   = 3000;
 
 async function startChild() {
   const env  = parseEnv();
   const port = parseInt(env.PORT, 10) || 3000;
+  currentPort = port;
 
   const portFree = await ensurePortFree(port);
   if (!portFree) {
@@ -269,6 +271,7 @@ function listenForKeys() {
     if (k === 'q') quit();
     else if (k === 'r') requestRestart();
     else if (k === 's') requestStop();
+    else if (k === 'l' && child) openBrowser(`http://localhost:${currentPort}/admin/dashboard`);
   });
 }
 

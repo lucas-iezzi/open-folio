@@ -829,6 +829,24 @@
     });
   }
 
+  // ── Settings: open the start/stop/restart terminal in a new window ─────────
+  const launchTerminalBtn = document.getElementById('launch-terminal-btn');
+  if (launchTerminalBtn) {
+    launchTerminalBtn.addEventListener('click', async () => {
+      const feedback = document.getElementById('launch-terminal-feedback');
+      launchTerminalBtn.disabled = true;
+      if (feedback) { feedback.textContent = 'Opening…'; feedback.style.color = 'var(--muted)'; }
+      try {
+        await apiFetch('/admin/local/launch-terminal', { method: 'POST' });
+        if (feedback) { feedback.textContent = 'Opened in a new window.'; feedback.style.color = 'var(--success, #2d8a4e)'; }
+      } catch (err) {
+        if (feedback) { feedback.textContent = err.message; feedback.style.color = 'var(--danger, #c0392b)'; }
+      } finally {
+        launchTerminalBtn.disabled = false;
+      }
+    });
+  }
+
   // ── Settings: provider key forms ──────────────────────────────────────────
   document.querySelectorAll('.provider-key-form').forEach(form => {
     form.addEventListener('submit', async (e) => {
@@ -1041,6 +1059,83 @@
     const stepStatus    = document.getElementById('rs-step-status');
     let currentStep     = 0;
 
+    // Grays out step navigation while a command is running, so a stray click can't
+    // fire off a second SSH command on top of one still in flight.
+    function setNavDisabled(disabled) {
+      if (disabled) {
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+      } else {
+        if (prevBtn) prevBtn.disabled = currentStep === 0;
+        if (nextBtn) nextBtn.disabled = currentStep === stepPanels.length - 1;
+      }
+      stepDots.forEach((dot) => { dot.disabled = disabled; });
+    }
+
+    // Rough expected durations for the slower setup commands, in ms — used only to
+    // shape the simulated progress curve below, not a real measurement. SSH commands
+    // give no actual progress signal, so this is a UX approximation: ramps up quickly,
+    // then eases off and holds under 100% until the request actually resolves.
+    const RS_STEP_ESTIMATES = {
+      apt_update:     25000,
+      node_install:   20000,
+      caddy_install:  20000,
+      npm_install:    15000,
+      pm2_install:     8000,
+      server_setup:    8000,
+      git_clone:       6000,
+      pm2_start:       6000,
+      caddy_configure: 5000,
+      ufw_setup:       4000,
+    };
+    // Shared show/set/hide primitives for the step-progress bar — used both by the
+    // simulated curve below (opaque SSH commands give no real signal) and by the
+    // "Push content" step, which drives this with genuine per-file progress instead.
+    function showStepProgressUI() {
+      const wrap = document.getElementById('rs-step-progress');
+      if (!wrap) return;
+      if (stepStatus) stepStatus.style.display = 'none';
+      wrap.style.display = 'flex';
+    }
+    function setStepProgressPct(pct) {
+      const fill = document.getElementById('rs-step-progress-fill');
+      const time = document.getElementById('rs-step-progress-time');
+      if (fill) fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+      if (time) time.textContent = Math.round(pct) + '%';
+    }
+    function hideStepProgressUI(success) {
+      const wrap = document.getElementById('rs-step-progress');
+      if (!wrap) return;
+      const restore = () => {
+        wrap.style.display = 'none';
+        if (stepStatus) stepStatus.style.display = '';
+      };
+      if (success) { setStepProgressPct(100); setTimeout(restore, 220); }
+      else restore();
+    }
+
+    let rsProgressTimer = null;
+
+    function startStepProgress(command) {
+      showStepProgressUI();
+      setStepProgressPct(0);
+
+      const estimate = RS_STEP_ESTIMATES[command] || 6000;
+      const tau   = estimate / 2.5;
+      const cap   = 92; // never claim "done" until the request actually resolves
+      const start = Date.now();
+
+      rsProgressTimer = setInterval(() => {
+        const elapsed = Date.now() - start;
+        setStepProgressPct(cap * (1 - Math.exp(-elapsed / tau)));
+      }, 200);
+    }
+
+    function stopStepProgress(success) {
+      if (rsProgressTimer) { clearInterval(rsProgressTimer); rsProgressTimer = null; }
+      hideStepProgressUI(success);
+    }
+
     function goToStep(n) {
       if (n < 0 || n >= stepPanels.length) return;
       stepPanels[currentStep].classList.remove('active');
@@ -1059,6 +1154,7 @@
           carouselRun.dataset.needsDomain    = stepPanels[currentStep].dataset.needsDomain    || 'false';
           carouselRun.dataset.needsPassword  = stepPanels[currentStep].dataset.needsPassword  || 'false';
           carouselRun.dataset.needsAdminPath = stepPanels[currentStep].dataset.needsAdminPath || 'false';
+          carouselRun.textContent = stepPanels[currentStep].dataset.runLabel || 'Run on server';
         }
       }
       if (manualDoneNav) manualDoneNav.style.display = isManual ? '' : 'none';
@@ -1066,8 +1162,32 @@
       if (logSetup) logSetup.style.display = 'none';
     }
 
+    // Persists which steps are done in localStorage — so the green dots survive a page
+    // reload or restarting the local server, not just the current page session.
+    const RS_SETUP_STORAGE_KEY = 'ofSetupStepsDone';
+    function loadDoneSteps() {
+      try { return new Set(JSON.parse(localStorage.getItem(RS_SETUP_STORAGE_KEY) || '[]')); }
+      catch { return new Set(); }
+    }
+    function updateSetupCompleteBadge() {
+      const badge = document.getElementById('rs-setup-complete-badge');
+      if (!badge) return;
+      const done = loadDoneSteps();
+      const allDone = stepPanels.length > 0 && stepPanels.every((_, i) => done.has(i));
+      badge.style.display = allDone ? '' : 'none';
+    }
+    function markStepDone(index) {
+      if (stepDots[index]) stepDots[index].classList.add('rs-dot--done');
+      const done = loadDoneSteps();
+      done.add(index);
+      try { localStorage.setItem(RS_SETUP_STORAGE_KEY, JSON.stringify([...done])); } catch { /* storage unavailable — dots just won't persist */ }
+      updateSetupCompleteBadge();
+    }
+    loadDoneSteps().forEach((i) => { if (stepDots[i]) stepDots[i].classList.add('rs-dot--done'); });
+    updateSetupCompleteBadge();
+
     if (manualDoneNav) manualDoneNav.addEventListener('click', () => {
-      if (stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
+      markStepDone(currentStep);
       if (stepStatus) { stepStatus.textContent = '✓ Marked done'; stepStatus.style.color = 'var(--success,#2d8a4e)'; }
     });
 
@@ -1077,9 +1197,74 @@
 
     goToStep(0); // initialise button visibility for the starting step
 
+    // The final setup step: pushes everything (db + all images) to a fresh server.
+    // Unlike the SSH-command steps above, this reuses the same streaming sync-item
+    // machinery as the Content Sync tool, so its progress bar shows real per-file
+    // completion instead of the simulated curve those opaque shell commands get.
+    async function runInitialContentPush() {
+      const items = [
+        { id: 'db',              label: 'Database'       },
+        { id: 'images/projects', label: 'Project images' },
+        { id: 'images/logos',    label: 'Logo images'    },
+      ];
+      if (logSetup) { logSetup.style.display = 'block'; logSetup.className = 'rs-log rs-log--running'; logSetup.textContent = ''; }
+      showStepProgressUI();
+      setStepProgressPct(0);
+
+      const checklist = [];
+      function render(liveLine) {
+        const text = checklist.concat(liveLine ? [liveLine] : []).join('\n');
+        showLog(logSetup, null, text || 'Starting…');
+      }
+
+      const total = items.length;
+      let allOk = true;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const r = await syncItemWithProgress(item.id, item.label, 'push', render, (frac) => {
+          setStepProgressPct(((i + frac) / total) * 100);
+        });
+        checklist.push(`${r.ok ? '✓' : '✗'} ${item.label}${r.attempts > 1 ? ` (${r.attempts} attempts)` : ''}`);
+        if (!r.ok) allOk = false;
+        render();
+      }
+
+      render('↺ Restarting server…');
+      let restartOk = true;
+      try {
+        const rr = await apiFetch('/admin/deploy/ssh-run', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ command: 'restart' }),
+        });
+        restartOk = rr.ok !== false;
+      } catch {
+        restartOk = false;
+      }
+      allOk = allOk && restartOk;
+
+      hideStepProgressUI(allOk);
+      if (stepStatus) { stepStatus.textContent = allOk ? '✓ Done' : '✗ Failed'; stepStatus.style.color = allOk ? 'var(--success,#2d8a4e)' : 'var(--danger,#c0392b)'; }
+      if (allOk && stepDots[currentStep]) markStepDone(currentStep);
+      showLog(logSetup, allOk, `Push content: ${allOk ? 'complete' : 'finished with errors'}`, checklist.join('\n'));
+    }
+
     if (carouselRun) {
       carouselRun.addEventListener('click', async () => {
         const command        = carouselRun.dataset.cmd;
+
+        if (command === 'push_content') {
+          carouselRun.disabled = true;
+          setNavDisabled(true);
+          try {
+            await runInitialContentPush();
+          } finally {
+            carouselRun.disabled = false;
+            setNavDisabled(false);
+          }
+          return;
+        }
+
         const needsDomain    = carouselRun.dataset.needsDomain    === 'true';
         const needsPassword  = carouselRun.dataset.needsPassword  === 'true';
         const needsAdminPath = carouselRun.dataset.needsAdminPath === 'true';
@@ -1097,7 +1282,8 @@
         }
 
         carouselRun.disabled = true;
-        if (stepStatus) { stepStatus.textContent = 'Running…'; stepStatus.style.color = 'var(--muted)'; }
+        setNavDisabled(true);
+        startStepProgress(command);
         if (logSetup) logSetup.style.display = 'none';
 
         const payload = { command };
@@ -1113,14 +1299,17 @@
             body:    JSON.stringify(payload),
           });
           const ok = r.ok !== false;
+          stopStepProgress(ok);
           if (stepStatus) { stepStatus.textContent = ok ? '✓ Done' : '✗ Failed'; stepStatus.style.color = ok ? 'var(--success,#2d8a4e)' : 'var(--danger,#c0392b)'; }
-          if (ok && stepDots[currentStep]) stepDots[currentStep].classList.add('rs-dot--done');
+          if (ok) markStepDone(currentStep);
           showLog(logSetup, ok, `Step ${currentStep + 1} ${ok ? 'complete' : 'failed'}`, r.output || r.stdout || r.stderr || '');
         } catch (err) {
+          stopStepProgress(false);
           if (stepStatus) { stepStatus.textContent = '✗ Failed'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
           showLog(logSetup, false, err.message);
         } finally {
           carouselRun.disabled = false;
+          setNavDisabled(false);
         }
       });
     }
@@ -1206,7 +1395,7 @@
       });
     }
 
-    // ── Push / Pull ──
+    // ── Sync content ──
     const rsProgress = document.getElementById('rs-sync-progress');
 
     function setSyncProgress(text) {
@@ -1215,81 +1404,152 @@
       rsProgress.textContent   = text || '';
     }
 
-    // Pushes/pulls db + project images + logo images, one at a time. Each item is
-    // transferred, then verified against the actual remote/local file listing, and
-    // retried automatically (server-side) until it matches — so "done" here means the
-    // files are confirmed present, not just that scp exited 0. Progress is rendered into
-    // the log box live as it streams in, instead of only appearing once everything finishes.
-    async function runSync(direction, label) {
-      const btn  = document.getElementById(`rs-${direction}-btn`);
+    // Drives both the Content Sync panel's progress bar and the banner's (if it's
+    // showing one) — whichever elements exist in the DOM get updated, so callers don't
+    // need to know which UI triggered the sync. pct === null hides both.
+    function setSyncProgressBar(pct) {
+      [
+        ['rs-sync-progress-bar', 'rs-sync-progress-fill', 'rs-sync-progress-pct'],
+        ['of-sync-progress-bar', 'of-sync-progress-fill', 'of-sync-progress-pct'],
+      ].forEach(([wrapId, fillId, pctId]) => {
+        const wrap = document.getElementById(wrapId);
+        if (!wrap) return;
+        if (pct === null) { wrap.style.display = 'none'; return; }
+        wrap.style.display = 'flex';
+        const fill = document.getElementById(fillId);
+        const pctEl = document.getElementById(pctId);
+        if (fill) fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(0) + '%';
+        if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+      });
+    }
+
+    // Transfers one item (db | images/logos | images/projects[/slug]) in the given
+    // direction, verified and retried server-side until it actually matches — "done"
+    // here means the files are confirmed present, not just that scp exited 0. Streams
+    // live progress into `render`, and reports fractional (0-1) completion for this one
+    // item via `onProgress` so a caller syncing several items can show overall progress.
+    async function syncItemWithProgress(itemId, label, direction, render, onProgress) {
       const icon = direction === 'push' ? '↑' : '↓';
+      let itemOk = false;
+      let attempts = 1;
+      let itemNotes = [];
+      const report = (f) => { if (onProgress) onProgress(f); };
+
+      try {
+        await streamNdjson('/admin/deploy/sync-item', { itemId, direction }, (ev) => {
+          let line = null;
+          if (ev.stage === 'checking') {
+            line = `🔍 ${label} — checking what's changed…`;
+            report(0.05);
+          } else if (ev.stage === 'diff-found') {
+            line = `${icon} ${label} — ${ev.count} of ${ev.total} file${ev.total === 1 ? '' : 's'} differ`;
+            report(0.15);
+          } else if (ev.stage === 'transfer' && ev.mode === 'file') {
+            line = `${icon} ${label} — file ${ev.index}/${ev.count}: ${ev.file}`;
+            report(0.15 + 0.75 * (ev.index / ev.count));
+          } else if (ev.stage === 'transfer') {
+            line = `${icon} ${label} — transferring…`;
+            report(0.5);
+          } else if (ev.stage === 'file-failed') {
+            line = `⚠ ${label} — ${ev.file} failed: ${ev.error}`;
+          } else if (ev.stage === 'verify') {
+            line = `🔍 ${label} — verifying…`;
+            report(0.92);
+          } else if (ev.stage === 'retrying') {
+            attempts = ev.nextAttempt;
+            line = `↻ ${label} — retrying (${ev.nextAttempt}/${ev.maxAttempts})…`;
+          } else if (ev.done) {
+            itemOk = ev.ok;
+            report(1);
+            if (ev.detail?.skipped) {
+              line = `✓ ${label} — already in sync, nothing to transfer`;
+            } else if (!ev.ok) {
+              const missing = ev.detail?.missing;
+              itemNotes = missing && missing.length ? missing : [ev.detail?.reason || ev.detail?.message || 'Sync failed.'];
+            }
+          }
+          if (line) { setSyncProgress(line); render(line); }
+        });
+      } catch (err) {
+        itemOk = false;
+        itemNotes = [err.message];
+      }
+      return { ok: itemOk, attempts, notes: itemNotes };
+    }
+
+    // The main "just make it match" action: compares local vs server, then pushes or
+    // pulls only what actually differs. When an item changed on *both* sides there's no
+    // way to know which one should win, so it asks once per such item instead of
+    // guessing. Shared by the Content Sync panel's button and the out-of-sync banner.
+    async function runContentSync() {
+      const btn = document.getElementById('rs-sync-btn');
       if (btn) btn.disabled = true;
-
-      const items = [
-        { id: 'db',              label: 'Database'       },
-        { id: 'images/projects', label: 'Project images' },
-        { id: 'images/logos',    label: 'Logo images'    },
-      ];
-
-      // Put log in running state immediately so user knows something is happening
       if (logSync) { logSync.style.display = 'block'; logSync.className = 'rs-log rs-log--running'; logSync.textContent = ''; }
+      setSyncProgress('Checking what has changed…');
+      showLog(logSync, null, 'Checking what has changed…');
+
+      let compareData;
+      try {
+        compareData = await apiFetch('/admin/deploy/compare', { method: 'POST' });
+      } catch (err) {
+        setSyncProgress(null);
+        showLog(logSync, false, 'Could not compare', err.message);
+        if (btn) btn.disabled = false;
+        return;
+      }
+      if (!compareData.ok || compareData.error) {
+        setSyncProgress(null);
+        showLog(logSync, false, 'Could not compare', compareData.error || '');
+        if (btn) btn.disabled = false;
+        return;
+      }
+
+      const items = compareData.items || [];
+      if (items.length === 0) {
+        setSyncProgress(null);
+        showLog(logSync, true, 'Already in sync — nothing to do.', '');
+        if (btn) btn.disabled = false;
+        return;
+      }
+
+      // Resolve a direction for every item, asking once for any that could go either way.
+      const plan = [];
+      for (const item of items) {
+        let direction = item.direction;
+        if (direction === 'both') {
+          const pushLocal = confirm(
+            `"${item.label}" has changed on BOTH sides${item.hint ? ` (${item.hint})` : ''}.\n\n` +
+            `Click OK to push your LOCAL copy to the server, or Cancel to pull the SERVER copy to local.`
+          );
+          direction = pushLocal ? 'push' : 'pull';
+        }
+        if (direction === 'push' || direction === 'pull') plan.push({ id: item.id, label: item.label, direction });
+      }
 
       const checklist = [];
-      const results   = [];
-
       function render(liveLine) {
         const text = checklist.concat(liveLine ? [liveLine] : []).join('\n');
-        if (logSync) showLog(logSync, null, text || 'Starting…');
+        showLog(logSync, null, text || 'Starting…');
       }
 
-      for (const item of items) {
-        let itemOk    = false;
-        let attempts  = 1;
-        let itemNotes = [];
-
-        try {
-          await streamNdjson('/admin/deploy/sync-item', { itemId: item.id, direction }, (ev) => {
-            let line = null;
-            if (ev.stage === 'checking') {
-              line = `🔍 ${item.label} — checking what's changed…`;
-            } else if (ev.stage === 'diff-found') {
-              line = `${icon} ${item.label} — ${ev.count} of ${ev.total} file${ev.total === 1 ? '' : 's'} differ`;
-            } else if (ev.stage === 'transfer' && ev.mode === 'file') {
-              line = `${icon} ${item.label} — file ${ev.index}/${ev.count}: ${ev.file}`;
-            } else if (ev.stage === 'transfer') {
-              line = `${icon} ${item.label} — transferring…`;
-            } else if (ev.stage === 'file-failed') {
-              line = `⚠ ${item.label} — ${ev.file} failed: ${ev.error}`;
-            } else if (ev.stage === 'verify') {
-              line = `🔍 ${item.label} — verifying…`;
-            } else if (ev.stage === 'retrying') {
-              attempts = ev.nextAttempt;
-              line = `↻ ${item.label} — retrying ${ev.label} (${ev.nextAttempt}/${ev.maxAttempts})…`;
-            } else if (ev.done) {
-              itemOk = ev.ok;
-              if (ev.detail?.skipped) {
-                line = `✓ ${item.label} — already in sync, nothing to transfer`;
-              } else if (!ev.ok) {
-                const missing = ev.detail?.missing;
-                itemNotes = missing && missing.length ? missing : [ev.detail?.reason || ev.detail?.message || 'Sync failed.'];
-              }
-            }
-            if (line) { setSyncProgress(line); render(line); }
-          });
-        } catch (err) {
-          itemOk    = false;
-          itemNotes = [err.message];
-        }
-
-        checklist.push(`${itemOk ? '✓' : '✗'} ${item.label}${attempts > 1 ? ` (${attempts} attempts)` : ''}`);
-        results.push({ label: item.label, ok: itemOk, output: itemNotes.join('\n') });
+      const total = plan.length || 1;
+      setSyncProgressBar(0);
+      const results = [];
+      for (let i = 0; i < plan.length; i++) {
+        const item = plan[i];
+        const r = await syncItemWithProgress(item.id, item.label, item.direction, render, (frac) => {
+          setSyncProgressBar(((i + frac) / total) * 100);
+        });
+        checklist.push(`${r.ok ? '✓' : '✗'} ${item.label}${r.attempts > 1 ? ` (${r.attempts} attempts)` : ''}`);
+        results.push({ label: item.label, ok: r.ok, output: r.notes.join('\n') });
         render();
       }
+      setSyncProgressBar(100);
 
-      // After push: restart remote server so it loads the new database
+      // Restart the remote server if we pushed anything, so it picks up the new database.
       let restartOk = null;
       let restartOut = '';
-      if (direction === 'push') {
+      if (plan.some((p) => p.direction === 'push')) {
         setSyncProgress('↺ Restarting server…');
         render('↺ Restarting server…');
         try {
@@ -1307,21 +1567,21 @@
       }
 
       setSyncProgress(null);
+      setTimeout(() => setSyncProgressBar(null), 400);
 
-      const allOk = results.every(x => x.ok) && (restartOk === null || restartOk);
-      const summary = results.map(x => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ') +
+      const allOk = results.every((x) => x.ok) && (restartOk === null || restartOk);
+      const summary = results.map((x) => `${x.label}: ${x.ok ? 'OK' : 'failed'}`).join(', ') +
         (restartOk !== null ? ` — server ${restartOk ? 'restarted' : 'restart failed'}` : '');
-      const stdout = results.map(x => `[${x.label}]\n${x.output || '(no issues)'}`).join('\n\n') +
+      const stdout = results.map((x) => `[${x.label}]\n${x.output || '(no issues)'}`).join('\n\n') +
         (restartOk !== null ? `\n\n[Server restart]\n${restartOut || '(no output)'}` : '');
 
-      showLog(logSync, allOk, `${label}: ${summary}`, stdout);
+      showLog(logSync, allOk, `Sync content: ${summary}`, stdout);
       if (btn) btn.disabled = false;
+      runCompare(); // refresh the diff view now that things have (hopefully) changed
     }
 
-    const rsPushBtn = document.getElementById('rs-push-btn');
-    const rsPullBtn = document.getElementById('rs-pull-btn');
-    if (rsPushBtn) rsPushBtn.addEventListener('click', () => runSync('push', 'Push to server'));
-    if (rsPullBtn) rsPullBtn.addEventListener('click', () => runSync('pull', 'Pull from server'));
+    const rsSyncBtn = document.getElementById('rs-sync-btn');
+    if (rsSyncBtn) rsSyncBtn.addEventListener('click', runContentSync);
 
     // ── Compare ──
     const rsCompareResult = document.getElementById('rs-compare-result');
@@ -1523,37 +1783,27 @@
       banner.id = 'of-sync-banner';
       banner.className = 'of-sync-banner';
       banner.innerHTML =
-        `<span class="of-sync-banner-text"><strong>Local and server content are out of sync</strong> — ${escHtml(parts.join(', '))}.</span>` +
-        `<span class="of-sync-banner-actions">` +
-          `<button type="button" class="btn btn-primary btn-sm" id="of-sync-push">&#x2191; Push local to server</button>` +
-          `<button type="button" class="btn btn-secondary btn-sm" id="of-sync-pull">&#x2193; Pull server to local</button>` +
-          `<button type="button" class="btn btn-secondary btn-sm" id="of-sync-review">Review details</button>` +
+        `<span class="of-sync-banner-text" id="of-sync-banner-text"><strong>Local and server content are out of sync</strong> — ${escHtml(parts.join(', '))}.</span>` +
+        `<span class="of-sync-banner-actions" id="of-sync-banner-actions">` +
+          `<button type="button" class="btn btn-primary btn-sm" id="of-sync-now">&#x21c4; Sync content</button>` +
           `<button type="button" class="of-sync-banner-dismiss" aria-label="Dismiss">&times;</button>` +
         `</span>`;
       document.body.insertBefore(banner, document.body.firstChild);
 
       banner.querySelector('.of-sync-banner-dismiss').addEventListener('click', () => banner.remove());
-      document.getElementById('of-sync-push').addEventListener('click', async () => {
-        banner.querySelectorAll('button').forEach(b => { b.disabled = true; });
-        await runSync('push', 'Push to server');
-        banner.remove();
-      });
-      document.getElementById('of-sync-pull').addEventListener('click', async () => {
-        banner.querySelectorAll('button').forEach(b => { b.disabled = true; });
-        await runSync('pull', 'Pull from server');
-        banner.remove();
-      });
-      document.getElementById('of-sync-review').addEventListener('click', () => {
-        banner.remove();
-        const deployTabBtn = document.querySelector('.admin-tab[data-tab="deploy"]');
-        if (deployTabBtn) deployTabBtn.click();
-        const syncCard = document.getElementById('rs-sync-card');
-        if (syncCard) syncCard.open = true;
-        if (comparePanel) {
-          comparePanel.open = true;
-          runCompare();
-          setTimeout(() => comparePanel.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+      document.getElementById('of-sync-now').addEventListener('click', async () => {
+        const textEl = document.getElementById('of-sync-banner-text');
+        const actionsEl = document.getElementById('of-sync-banner-actions');
+        if (textEl) textEl.innerHTML = '<strong>Syncing content…</strong>';
+        if (actionsEl) {
+          actionsEl.innerHTML =
+            `<span id="of-sync-progress-bar" class="rs-step-progress">` +
+              `<span class="rs-step-progress-track"><span class="rs-step-progress-fill" id="of-sync-progress-fill"></span></span>` +
+              `<span class="rs-step-progress-time" id="of-sync-progress-pct"></span>` +
+            `</span>`;
         }
+        await runContentSync();
+        banner.remove();
       });
     }
 
@@ -1672,6 +1922,70 @@
         setTimeout(() => { rsBackupBtn.innerHTML = 'Download backup from server'; }, 2500);
       }
     });
+
+    // ── Clear content (destructive — backs up first, requires typed confirmation) ──
+    const logClear = document.getElementById('rs-log-clear');
+
+    async function confirmDestructive(message) {
+      if (!confirm(message)) return false;
+      const typed = prompt('Type DELETE to confirm — this cannot be undone from within the app:');
+      return typed === 'DELETE';
+    }
+
+    const rsClearServerBtn = document.getElementById('rs-clear-server-btn');
+    if (rsClearServerBtn) {
+      rsClearServerBtn.addEventListener('click', async () => {
+        const ok = await confirmDestructive(
+          'This will permanently delete ALL projects and project images on the LIVE SERVER ' +
+          '(logos and site settings are kept). A backup will be downloaded first, but the server ' +
+          'itself cannot be restored from within the app afterward. Continue?'
+        );
+        if (!ok) return;
+        rsClearServerBtn.disabled = true;
+        showLog(logClear, null, 'Backing up the server, then clearing its content…');
+        try {
+          const r = await apiFetch('/admin/deploy/clear-remote', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          const ok2 = r.ok !== false;
+          showLog(logClear, ok2,
+            ok2 ? `Server content cleared. Backup saved to ${r.backupPath}.` : 'Failed to clear server content.',
+            r.output || r.error || '');
+          if (ok2) runCompare();
+        } catch (err) {
+          showLog(logClear, false, err.message);
+        } finally {
+          rsClearServerBtn.disabled = false;
+        }
+      });
+    }
+
+    const rsClearLocalBtn = document.getElementById('rs-clear-local-btn');
+    if (rsClearLocalBtn) {
+      rsClearLocalBtn.addEventListener('click', async () => {
+        const ok = await confirmDestructive(
+          'This will permanently delete ALL projects and project images on THIS LOCAL MACHINE ' +
+          '(logos and site settings are kept). A backup will be saved to data/backups/ first. Continue?'
+        );
+        if (!ok) return;
+        rsClearLocalBtn.disabled = true;
+        showLog(logClear, null, 'Backing up local content, then clearing it…');
+        try {
+          const r = await apiFetch('/admin/deploy/clear-local', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          const ok2 = r.ok !== false;
+          showLog(logClear, ok2,
+            ok2 ? `Local content cleared. Backup saved to ${r.backupPath}.` : 'Failed to clear local content.',
+            r.error || '');
+          if (ok2) runCompare();
+        } catch (err) {
+          showLog(logClear, false, err.message);
+        } finally {
+          rsClearLocalBtn.disabled = false;
+        }
+      });
+    }
 
     // ── Open SSH terminal ──
     const rsOpenTermBtn = document.getElementById('rs-open-terminal');

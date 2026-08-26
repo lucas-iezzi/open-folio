@@ -585,6 +585,15 @@
 
       <% if (isLocalAccess) { %>
       <p style="font-size:.8rem;color:var(--muted);margin-top:2rem">No password is required to access this admin panel from your local machine. The password above only matters once your site is live — set it (and a secret admin path) from the <strong>Remote Server</strong> tab.</p>
+
+      <div class="settings-section" style="margin-top:2rem">
+        <div class="settings-section-title">Local Server Control</div>
+        <p class="settings-section-desc">Opens the start/stop/restart terminal (<code>scripts/start.js</code>) in a new window — useful if you closed it and the site is still running, or you want it back to restart the server.</p>
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <button type="button" id="launch-terminal-btn" class="btn btn-secondary btn-sm">Open start/restart terminal</button>
+          <span id="launch-terminal-feedback" style="font-size:.8rem;color:var(--muted)" aria-live="polite"></span>
+        </div>
+      </div>
       <% } %>
 
     </div><!-- /tab-settings -->
@@ -661,6 +670,7 @@
             <summary class="rs-card-summary">
               <span class="rs-card-title">Server Setup</span>
               <span class="rs-card-subtitle">One-time — run these steps on a fresh server</span>
+              <span id="rs-setup-complete-badge" class="rs-setup-complete-badge" style="display:none">✓ Complete</span>
             </summary>
             <div class="rs-card-body rs-setup-body">
               <div class="rs-dots" id="rs-dots">
@@ -676,6 +686,7 @@
                 <button class="rs-dot" data-step="9"  title="Step 10"></button>
                 <button class="rs-dot" data-step="10" title="Step 11"></button>
                 <button class="rs-dot" data-step="11" title="Step 12"></button>
+                <button class="rs-dot" data-step="12" title="Step 13"></button>
               </div>
 
               <div class="rs-step-panels">
@@ -813,6 +824,15 @@ TTL:   Auto or 3600</pre>
                   </div>
                 </div>
 
+                <!-- Step 13: Push content to server -->
+                <div class="rs-step-panel" data-step="12" data-cmd="push_content" data-run-label="⇄ Push content to server">
+                  <div class="rs-sp-head"><span class="rs-step-num">13</span><span class="rs-sp-title">Push your content to the server</span></div>
+                  <div class="rs-sp-body">
+                    <p>Uploads your local database, project images, and logos to the server, so your live site starts out with the same content you already have locally.</p>
+                    <p>This can take a while the first time if you have a lot of images — the progress bar below shows real, file-by-file progress rather than an estimate.</p>
+                  </div>
+                </div>
+
               </div><!-- /rs-step-panels -->
 
               <div class="rs-carousel-nav">
@@ -820,6 +840,10 @@ TTL:   Auto or 3600</pre>
                 <button id="rs-carousel-run" class="btn btn-primary btn-sm" style="display:none">Run on server</button>
                 <button id="rs-manual-done-nav" class="btn btn-primary btn-sm" style="display:none">✓ Mark step done</button>
                 <span id="rs-step-status" class="rs-run-status"></span>
+                <span id="rs-step-progress" class="rs-step-progress" style="display:none">
+                  <span class="rs-step-progress-track"><span class="rs-step-progress-fill" id="rs-step-progress-fill"></span></span>
+                  <span class="rs-step-progress-time" id="rs-step-progress-time"></span>
+                </span>
                 <button id="rs-next-step" class="btn btn-secondary btn-sm">Next →</button>
               </div>
               <div class="rs-log" id="rs-log-setup" aria-live="polite"></div>
@@ -831,39 +855,29 @@ TTL:   Auto or 3600</pre>
           <details class="rs-card" id="rs-sync-card">
             <summary class="rs-card-summary">
               <span class="rs-card-title">Content Sync</span>
-              <span class="rs-card-subtitle">Push and pull database, images, and styles</span>
+              <span class="rs-card-subtitle">See what differs, then sync it in one click</span>
             </summary>
             <div class="rs-card-body">
-              <div class="rs-sync-row">
-                <div class="rs-sync-tile">
-                  <div class="rs-sync-arrow">↑</div>
-                  <div class="rs-sync-name">Push local → server</div>
-                  <div class="rs-sync-desc">Upload database, images, and styles to the live server</div>
-                  <button id="rs-push-btn" class="btn btn-primary btn-sm">Push to server</button>
-                </div>
-                <div class="rs-sync-tile">
-                  <div class="rs-sync-arrow">↓</div>
-                  <div class="rs-sync-name">Pull server → local</div>
-                  <div class="rs-sync-desc">Download database and images from server to this machine</div>
-                  <button id="rs-pull-btn" class="btn btn-secondary btn-sm">Pull from server</button>
-                </div>
-              </div>
-              <p id="rs-sync-progress" style="display:none;font-size:.85rem;color:var(--muted);margin:.5rem 0 0;min-height:1.25rem"></p>
-              <div class="rs-log" id="rs-log-sync" aria-live="polite"></div>
-
               <details class="rs-sync-panel" data-panel="compare">
                 <summary class="rs-sync-panel-head">
                   <span class="rs-sync-icon">⇄</span>
                   <div class="rs-sync-panel-info">
                     <span class="rs-sync-panel-title">Compare content</span>
-                    <span class="rs-sync-panel-hint">See what differs between local and server — no changes made</span>
+                    <span class="rs-sync-panel-hint">Opens showing what differs between local and server</span>
                   </div>
                 </summary>
                 <div class="rs-sync-panel-body">
-                  <div style="display:flex;justify-content:flex-end;margin-bottom:.4rem">
+                  <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:.6rem">
                     <button id="rs-compare-refresh" class="btn btn-secondary btn-sm">↺ Refresh</button>
+                    <button id="rs-sync-btn" class="btn btn-primary btn-sm">⇄ Sync content</button>
                   </div>
+                  <p id="rs-sync-progress" style="display:none;font-size:.85rem;color:var(--muted);margin:0 0 .3rem;min-height:1.25rem"></p>
+                  <span id="rs-sync-progress-bar" class="rs-step-progress" style="display:none;margin-bottom:.6rem">
+                    <span class="rs-step-progress-track"><span class="rs-step-progress-fill" id="rs-sync-progress-fill"></span></span>
+                    <span class="rs-step-progress-time" id="rs-sync-progress-pct"></span>
+                  </span>
                   <div id="rs-compare-result"></div>
+                  <div class="rs-log" id="rs-log-sync" aria-live="polite"></div>
                 </div>
               </details>
 
@@ -878,6 +892,24 @@ TTL:   Auto or 3600</pre>
                 <div class="rs-sync-panel-body">
                   <div><button id="rs-backup-btn" class="btn btn-secondary btn-sm">Download backup from server</button></div>
                   <div id="rs-backup-list"></div>
+                </div>
+              </details>
+
+              <details class="rs-sync-panel rs-sync-panel--danger" data-panel="clear">
+                <summary class="rs-sync-panel-head">
+                  <span class="rs-sync-icon">⚠</span>
+                  <div class="rs-sync-panel-info">
+                    <span class="rs-sync-panel-title">Clear content</span>
+                    <span class="rs-sync-panel-hint">Wipe all projects + project images, so a side can be pushed/pulled fresh</span>
+                  </div>
+                </summary>
+                <div class="rs-sync-panel-body">
+                  <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">Deletes all projects and project images on one side only (logos and site settings are kept). A backup is taken automatically first — but this still can't be undone from within the app. Use this to reset one side before a fresh push or pull.</p>
+                  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+                    <button id="rs-clear-server-btn" class="btn btn-danger btn-sm">Clear all content from server</button>
+                    <button id="rs-clear-local-btn" class="btn btn-danger btn-sm">Clear all content from local site</button>
+                  </div>
+                  <div class="rs-log" id="rs-log-clear" aria-live="polite"></div>
                 </div>
               </details>
             </div>

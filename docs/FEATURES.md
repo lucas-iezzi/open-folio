@@ -34,13 +34,15 @@ Access at `/admin/login`. Everything you need to manage your site:
 - **Nav logo size** — slider to adjust logo height (50% to 200%)
 - **Admin password** — change your login password without restarting the server. Only matters for a live deployment — no password is ever required to use this admin panel from your own machine.
 - **AI provider** — add API keys and switch between Anthropic, OpenAI, and Gemini
+- **Local Server Control** — reopens the start/stop/restart terminal (`scripts/start.js`) in a new window, in case you closed it while the site was still running. Local access only.
 
 ### Remote Server tab
 Only shown when running locally. Full server management without needing a terminal:
 - Save SSH credentials (host, username, port, remote path)
 - Test SSH connection with one click
-- Step-by-step server setup — each step has a "Run on server" button that executes the command and shows output, including setting your live admin password and an optional secret admin path (visit that word instead of typing "admin" to reach the login page — otherwise `/admin/login` 404s for outside visitors)
-- **Content Sync:** push your local database and images to the server, pull from server, compare differences, or download a full backup. Every push/pull only transfers files that actually differ and verifies they landed correctly, retrying automatically if not. When the admin panel opens, it checks the server in the background and shows a banner with Push/Pull buttons if anything differs — nothing syncs without you clicking. Compare also flags orphaned files (unused by any project, safe to delete) and broken image references (a project points at a file that's missing).
+- 13-step server setup, each with a "Run on server" button: provisioning through DNS, plus a final step that pushes your local database and images to the fresh server with real (not estimated) per-file progress. Includes setting your live admin password and an optional secret admin path (visit that word instead of typing "admin" to reach the login page — otherwise `/admin/login` 404s for outside visitors). Completed steps persist across reloads and restarts, and the card shows a "✓ Complete" badge once all 13 are done.
+- **Content Sync:** one "Sync content" button that compares local vs. server and pushes/pulls exactly what differs, asking once when something changed on both sides. Every transfer verifies it landed correctly and retries automatically if not. A banner appears (with the same button) if anything's out of sync when the admin panel opens. Compare also flags orphaned files (unused by any project, safe to delete) and broken image references (a project points at a file that's missing).
+- **Clear Content:** wipes all projects + project images on just the server or just the local site (logos and site settings are kept), so that side can be pushed/pulled fresh. Backs up automatically first and requires typing "DELETE" to confirm.
 - **Server Commands:** restart the site, view logs, check status (PM2 + disk + uptime), pull code updates (git pull + npm install + restart), change the live admin password or secret admin path
 - Copy the SSH command to open a terminal session to your server
 - AI assistant for troubleshooting and setup questions — it can also answer questions about the codebase itself, since it reads this project's own docs
@@ -130,7 +132,7 @@ Your API key is in `.env` and shown in **Admin → Settings → API key**.
 - Checks Node.js and dependencies, generates `.env` automatically on first run (no password needed locally)
 - Shows a clean "Running — http://localhost:3000" screen once the server is confirmed up, and opens the admin panel in your browser
 - Automatically reclaims the port if a previous session didn't shut down cleanly
-- **R** to restart, **S** to stop, **Q** (or Ctrl+C) to quit — any time, not just after it stops
+- **R** to restart, **S** to stop, **L** to open the admin panel in your browser, **Q** (or Ctrl+C) to quit — any time, not just after it stops
 - If it crashes unexpectedly, the error stays on screen and it prompts you to restart or quit
 - Change the port or AI provider from the admin panel's Settings tab once it's running
 

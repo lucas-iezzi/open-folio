@@ -1293,7 +1293,7 @@ PORTFOLIO TECH STACK:
 REMOTE SERVER TAB — what the user sees and can do:
 1. Server Credentials card: host/user/SSH port/remote path fields + "Test Connection" button. Green dot = SSH auth works.
 2. SSH Key Setup (inside Credentials): fetches the local public key and shows the exact command to add it to the server's authorized_keys.
-3. Server Setup carousel (12 steps — each has a "Run on server" button that executes the command over SSH):
+3. Server Setup carousel (13 steps — each has a "Run on server" button):
    Step 1:  Get a VPS (manual — choose provider, get IP, add SSH key)
    Step 2:  Set up firewall (UFW) — sudo ufw allow 22/80/443 && ufw enable
    Step 3:  Update packages — sudo apt-get update && sudo apt-get upgrade -y
@@ -1306,8 +1306,10 @@ REMOTE SERVER TAB — what the user sees and can do:
    Step 10: Start with PM2 — pm2 start scripts/ecosystem.config.js --env production && pm2 save
    Step 11: Configure Caddy — user enters one or more bare domains, comma-separated (e.g. "foo.com, bar.com"); each gets its own www. variant added automatically, and Caddyfile is written with all addresses on one reverse_proxy localhost:3000 block
    Step 12: Point DNS (manual — A record at registrar pointing to server IP)
-   Note: Steps 1 and 12 are manual (no SSH command) — their "Mark step done" button only turns the step bubble green; it does not auto-advance the carousel, so the user reviews the instructions at their own pace.
-4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows exact per-file diff, read-only), Backup (downloads everything). On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with "Push to server" / "Pull from server" / "Review details" buttons — nothing is synced automatically without the user clicking one of those. Every push/pull first diffs local vs remote and transfers only files that actually differ (skips entirely if already in sync); small diffs go file-by-file with independent per-file retry, large/fresh transfers use one recursive scp; either way the result is re-verified against the actual remote/local file listing and retried up to 3 times before giving up, instead of trusting scp's exit code alone. Compare also flags "broken" images (a project references a file that isn't actually there — the real signature of images going missing) and "orphaned" files (unused by any project, safe to delete via a reviewable per-file button) using a content manifest (lib/content-manifest.js, scripts/manifest.js) that requires the remote to have pulled that script via git — content sync (push/pull) never deploys code, only DB + images, so a server that hasn't run "Pull code updates" recently won't have orphan/broken detection yet even though basic push/pull still works.
+   Step 13: Push your content to the server — pushes db + all images so the fresh server starts out with real content. Unlike steps 2-11 (opaque SSH commands, so their progress bar is a simulated estimate), this one reuses the same streaming sync-item machinery as Content Sync, so its progress bar shows genuine per-file completion.
+   Note: Steps 1 and 12 are manual (no SSH command) — their "Mark step done" button only turns the step bubble green; it does not auto-advance the carousel, so the user reviews the instructions at their own pace. Completed steps (the green bubbles) persist in the browser's localStorage, surviving a page reload or restarting the local server — a "✓ Complete" badge shows next to the card title once all 13 are done, and the card defaults collapsed.
+4. Content Sync: one "⇄ Sync content" button inside the Compare panel — runs Compare, then pushes/pulls exactly the items that differ (each with its own progress bar and log lines), asking once per item (a confirm() dialog) when that item changed on *both* sides and there's no way to know which should win. Compare itself (`/admin/deploy/compare`) is read-only and re-runs whenever the panel is opened or "Refresh" is clicked; it also flags "broken" images (a project references a file that isn't actually there — the real signature of images going missing) and "orphaned" files (unused by any project, safe to delete via a reviewable per-file button), using a content manifest (lib/content-manifest.js, scripts/manifest.js) that requires the remote to have pulled that script via git — content sync (push/pull) never deploys code, only DB + images, so a server that hasn't run "Pull code updates" recently won't have orphan/broken detection yet even though basic sync still works. Individual items can still be pushed/pulled one at a time from the expanded compare list. On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with the same single Sync button (with its own progress bar) — nothing syncs automatically without a click. Backup (downloads everything) is a separate action. Every transfer first diffs local vs remote and sends only files that actually differ (skips entirely if already in sync); small diffs go file-by-file with independent per-file retry, large/fresh transfers use one recursive scp; either way the result is re-verified against the actual remote/local file listing and retried up to 3 times before giving up, instead of trusting scp's exit code alone.
+4b. Clear Content (in the Content Sync card, styled as a danger zone): "Clear all content from server" / "...from local site" — deletes all projects + project images on just that one side (logos and site settings are left alone), so it can be pushed/pulled fresh. Backs up automatically first (downloads a snapshot for server, copies to data/backups/ for local) and aborts without deleting anything if that backup fails. Requires typing DELETE to confirm, on top of a regular confirm() dialog. Clears the projects table via the already-open db handle (a DELETE statement) rather than deleting the .db file — deleting a file that's open by the very process serving the request doesn't work reliably, especially on Windows.
 5. Server Commands (one-click buttons that run over SSH):
    - Restart site: pm2 restart open-folio
    - View logs: pm2 logs open-folio --lines 80
@@ -2606,12 +2608,12 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
   res.end();
 });
 
-app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, res) => {
-  const srv = readServerConfig().server;
-  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+// Downloads a full snapshot of the remote's db + images into data/backups/<label or
+// timestamp>/. Shared by the manual Backup button and the clear-remote safety net below.
+function backupRemote(srv, label) {
   const { host, user, sshPort = 22, remotePath = '~/open-folio' } = srv;
   const remote = `${user}@${host}`;
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const ts = label || new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const backupDir = path.join(__dirname, 'data', 'backups', ts);
   fs.mkdirSync(backupDir, { recursive: true });
   // scp copies remote portfolio.db into backupDir/ and remote images/ dir into backupDir/images/
@@ -2619,7 +2621,71 @@ app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, r
     { label: 'Database', ...scpRun(`${remote}:${remotePath}/data/portfolio.db`, backupDir, sshPort) },
     { label: 'Images',   ...scpRun(`${remote}:${remotePath}/public/images`,     backupDir, sshPort, true) },
   ];
-  res.json({ ok: results.every(r => r.ok), backupPath: path.relative(__dirname, backupDir), results });
+  return { ok: results.every((r) => r.ok), backupPath: path.relative(__dirname, backupDir), results };
+}
+
+app.post('/admin/deploy/backup', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+  res.json(backupRemote(srv));
+});
+
+// Wipes all projects + project images on one side, so it can be pushed/pulled fresh.
+// Scoped deliberately narrow: logos and site settings (name, tagline, AI keys, admin
+// path) are left alone — those are branding/config, not "content". Both sides back up
+// what they're about to delete first, and abort instead of clearing if that backup
+// fails, since there'd otherwise be no way to recover from a mistake.
+function clearLocalContentFiles() {
+  const dir = path.join(__dirname, 'public', 'images', 'projects');
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir)) {
+    if (entry === '.gitkeep') continue;
+    fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
+app.post('/admin/deploy/clear-local', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  try {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupDir = path.join(__dirname, 'data', 'backups', `pre-clear-local_${ts}`);
+    fs.mkdirSync(backupDir, { recursive: true });
+    const localDb = path.join(__dirname, 'data', 'portfolio.db');
+    if (fs.existsSync(localDb)) fs.copyFileSync(localDb, path.join(backupDir, 'portfolio.db'));
+    const projImgDir = path.join(__dirname, 'public', 'images', 'projects');
+    if (fs.existsSync(projImgDir)) fs.cpSync(projImgDir, path.join(backupDir, 'images', 'projects'), { recursive: true });
+
+    // Clear project rows via the already-open db handle (not by deleting the file —
+    // that file is held open by this very process, which Windows won't allow anyway).
+    db.exec('DELETE FROM projects');
+    clearLocalContentFiles();
+
+    res.json({ ok: true, backupPath: path.relative(__dirname, backupDir) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/deploy/clear-remote', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const srv = readServerConfig().server;
+  if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
+
+  const backup = backupRemote(srv, `pre-clear-remote_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`);
+  if (!backup.ok) {
+    return res.status(500).json({ error: "Could not back up the server before clearing — stopped for safety, nothing was deleted.", backup });
+  }
+
+  const rp  = srv.remotePath || '~/open-folio';
+  const erp = xrp(rp);
+  // Same DELETE-via-node approach as the local clear: the remote's own pm2-managed
+  // process has portfolio.db open, so a short-lived node process opens/writes/closes
+  // its own connection rather than deleting the file out from under it.
+  const cmd = `cd "${erp}" && node -e "const db=require('better-sqlite3')('data/portfolio.db'); db.exec('DELETE FROM projects'); db.close();" && rm -rf public/images/projects/*`;
+  const result = sshExec(srv, cmd, 30000);
+  res.json({
+    ok: result.ok,
+    backupPath: backup.backupPath,
+    output: [result.stdout, result.stderr, result.err].filter(Boolean).join('\n'),
+  });
 });
 
 app.post('/admin/deploy/open-terminal', requireAuth, requireCsrf, requireLocal, (req, res) => {
@@ -2648,6 +2714,40 @@ app.post('/admin/deploy/open-terminal', requireAuth, requireCsrf, requireLocal, 
         }
       }
       if (!launched) return res.status(400).json({ error: 'No terminal emulator found. Copy the SSH command and paste it in your terminal.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Opens a new terminal window running scripts/start.js — a way back to the
+// start/stop/restart controls if that window was closed while the server (started
+// detached, so closing its terminal doesn't necessarily stop it) is still running.
+// Local-only for the same reason the whole Remote Server tab is: requireLocal's
+// Host-header check can't be spoofed without also being able to reach this machine's
+// own port 3000 directly, which the setup wizard's firewall step already prevents.
+app.post('/admin/local/launch-terminal', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  try {
+    if (process.platform === 'darwin') {
+      const cdCmd = `cd '${__dirname.replace(/'/g, "'\\''")}' && node scripts/start.js`;
+      const script = `tell application "Terminal" to do script "${cdCmd.replace(/"/g, '\\"')}"`;
+      spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/K', 'node scripts\\start.js'],
+        { detached: true, stdio: 'ignore', shell: true, cwd: __dirname }).unref();
+    } else {
+      const candidates = ['x-terminal-emulator', 'gnome-terminal', 'xfce4-terminal', 'xterm'];
+      let launched = false;
+      for (const t of candidates) {
+        const r = spawnSync('which', [t], { encoding: 'utf8' });
+        if (r.status === 0) {
+          spawn(t, ['-e', 'node scripts/start.js'], { detached: true, stdio: 'ignore', cwd: __dirname }).unref();
+          launched = true;
+          break;
+        }
+      }
+      if (!launched) return res.status(400).json({ error: 'No terminal emulator found. Run "node scripts/start.js" manually from the project folder.' });
     }
     res.json({ ok: true });
   } catch (err) {

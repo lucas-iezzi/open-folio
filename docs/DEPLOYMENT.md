@@ -49,6 +49,7 @@ Your site is at:
 
 - **R** — restart the server
 - **S** — stop it (press R again afterward to start it back up)
+- **L** — open the admin panel in your browser
 - **Q** (or Ctrl+C) — quit
 
 These work at any time the server is running, not just at a prompt. If it ever exits unexpectedly (a crash), the screen isn't cleared — the exit code and whatever it printed stay visible — and you're prompted to restart or quit. It also automatically reclaims port 3000 if a previous session didn't shut down cleanly, rather than failing to start.
