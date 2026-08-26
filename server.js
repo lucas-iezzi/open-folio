@@ -1913,7 +1913,36 @@ const SSH_CMDS = {
   status:           ()             => '(which pm2 > /dev/null 2>&1 && pm2 status) || echo "⚠  pm2 not installed — run the Install PM2 setup step first"; echo ""; df -h / ; echo ""; uptime',
   logs:             ()             => 'pm2 logs open-folio --lines 80 --nostream',
   git_pull:         (rp)           => `cd "${xrp(rp)}" && git pull && npm install --omit=dev && pm2 restart open-folio`,
-  git_clone:        (rp, url)      => `git clone '${shEsc(url)}' "${xrp(rp)}"`,
+  // Re-running this step (e.g. after a partial setup, resetting the server, or clicking
+  // it again) shouldn't crash just because the directory already exists. If it's already
+  // the right git repo, just pull the latest. Otherwise, clone fresh — but never by
+  // deleting what's there first: the old directory is renamed aside, the clone happens
+  // into a clean path, and any real content the old one had (the database, uploaded
+  // images, .env) is moved over into the new clone. Only .gitkeep placeholders are ever
+  // tracked by git in data/ and public/images/, so nothing here can collide with what a
+  // fresh clone brings in.
+  git_clone: (rp, url) => {
+    const R = xrp(rp);
+    const U = shEsc(url);
+    const restore = (sub) => `[ -d "$BAK/${sub}" ] && find "$BAK/${sub}" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec mv -t "$R/${sub}/" {} + 2>/dev/null`;
+    return `
+R="${R}"
+if [ -d "$R/.git" ]; then
+  cd "$R" && git pull
+elif [ -d "$R" ] && [ "$(ls -A "$R" 2>/dev/null)" ]; then
+  BAK="$R.bak-$(date +%Y%m%d%H%M%S)"
+  mv "$R" "$BAK"
+  git clone '${U}' "$R" || exit 1
+  mkdir -p "$R/data" "$R/public/images/projects" "$R/public/images/logos"
+  [ -f "$BAK/.env" ] && mv "$BAK/.env" "$R/.env"
+  ${restore('data')}
+  ${restore('public/images/projects')}
+  ${restore('public/images/logos')}
+  echo "Recovered existing content from $BAK — remove that backup folder once you've confirmed everything looks right."
+else
+  git clone '${U}' "$R"
+fi`.trim();
+  },
   ufw_setup:        ()             => 'sudo ufw allow 22 && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw --force enable && sudo ufw status',
   caddy_install:    ()             => "sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt update && sudo apt install caddy -y && sudo systemctl enable caddy && sudo systemctl start caddy && caddy version",
   caddy_configure:  (rp, addresses) => `printf '${shEsc(addresses)} {\\n  reverse_proxy localhost:3000\\n}\\n' | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy && sudo systemctl status caddy --no-pager`,
@@ -2186,13 +2215,17 @@ app.post('/admin/deploy/clear-known-host', requireAuth, requireCsrf, requireLoca
 // The setup carousel's completed-step dots used to live only in the browser's
 // localStorage, which kept showing every step as "done" even after the actual
 // server was wiped and rebuilt — nothing tied that state to a specific server
-// instance. A small JSON file next to the app on the remote (gone the moment the
-// server is reset/redeployed fresh) is the source of truth instead.
-const SETUP_PROGRESS_FILE = '.setup-progress.json';
+// instance. A small JSON file on the remote (gone the moment the server is
+// reset/redeployed fresh) is the source of truth instead. Deliberately stored in
+// $HOME rather than inside the app's remotePath — early setup steps (before the
+// repo is even cloned) would otherwise leave this file sitting in what's supposed
+// to be an empty destination, making the actual git-clone step fail with "not an
+// empty directory".
+const SETUP_PROGRESS_FILE = '.open-folio-setup-progress.json';
 
 // Returns the array of completed step indices, or null if the server couldn't be reached.
-function readSetupProgressRemote(srv, erp) {
-  const r = sshExec(srv, `cat "${erp}/${SETUP_PROGRESS_FILE}" 2>/dev/null || echo '[]'`, 15000);
+function readSetupProgressRemote(srv) {
+  const r = sshExec(srv, `cat "$HOME/${SETUP_PROGRESS_FILE}" 2>/dev/null || echo '[]'`, 15000);
   if (!r.ok) return null;
   try {
     const steps = JSON.parse(r.stdout || '[]');
@@ -2203,8 +2236,7 @@ function readSetupProgressRemote(srv, erp) {
 app.post('/admin/deploy/setup-progress', requireAuth, requireCsrf, requireLocal, (req, res) => {
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.json({ ok: true, configured: false, steps: [] });
-  const erp = xrp(srv.remotePath || '~/open-folio');
-  const steps = readSetupProgressRemote(srv, erp);
+  const steps = readSetupProgressRemote(srv);
   if (steps === null) return res.json({ ok: false, configured: true, error: 'Could not reach server.', steps: [] });
   res.json({ ok: true, configured: true, steps });
 });
@@ -2214,10 +2246,9 @@ app.post('/admin/deploy/mark-setup-step', requireAuth, requireCsrf, requireLocal
   if (!Number.isInteger(step) || step < 0 || step > 50) return res.status(400).json({ error: 'Invalid step.' });
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
-  const erp = xrp(srv.remotePath || '~/open-folio');
-  const existing = readSetupProgressRemote(srv, erp) || [];
+  const existing = readSetupProgressRemote(srv) || [];
   const steps = [...new Set([...existing, step])].sort((a, b) => a - b);
-  const w = sshExecWithStdin(srv, `mkdir -p "${erp}" && cat > "${erp}/${SETUP_PROGRESS_FILE}"`, JSON.stringify(steps), 15000);
+  const w = sshExecWithStdin(srv, `cat > "$HOME/${SETUP_PROGRESS_FILE}"`, JSON.stringify(steps), 15000);
   if (!w.ok) return res.status(502).json({ error: w.stderr || w.err || 'Failed to save progress on the server.' });
   res.json({ ok: true, steps });
 });
