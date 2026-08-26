@@ -71,6 +71,21 @@ function mask(s) {
   return C.gray + s.slice(0, 4) + '…' + s.slice(-4) + C.reset;
 }
 
+const RESERVED_ADMIN_PATHS = new Set([
+  'projects', 'sandbox', 'api', 'robots.txt', 'logo-size.css', 'sandbox-active.css',
+  'images', 'js', 'css', 'public', 'login', 'logout', 'dashboard',
+]);
+function validateAdminPath(raw) {
+  const clean = String(raw).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{2,39}$/.test(clean)) {
+    throw new Error('Admin path must be 3-40 characters: lowercase letters, numbers, and hyphens only.');
+  }
+  if (clean !== 'admin' && RESERVED_ADMIN_PATHS.has(clean)) {
+    throw new Error(`"${clean}" is a reserved path and can't be used.`);
+  }
+  return clean;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function banner() {
   if (TTY) process.stdout.write('\x1b[2J\x1b[H');
@@ -91,6 +106,7 @@ function restartHint() {
 
 // ── Non-interactive CLI mode ──────────────────────────────────────────────────
 // Usage: node manage.js --set-password=xxx
+//        node manage.js --set-admin-path=xxx
 //        node manage.js --rotate-secret
 //        node manage.js --rotate-api-key
 const cliArgs = Object.fromEntries(
@@ -106,6 +122,14 @@ async function runCli(bcrypt) {
     const hash = await bcrypt.hash(pw, 12);
     writeEnvKey('ADMIN_PASSWORD_HASH', hash);
     console.log('Password updated. Restart to apply: pm2 restart open-folio');
+    process.exit(0);
+  }
+  if (cliArgs['set-admin-path'] !== undefined) {
+    let clean;
+    try { clean = validateAdminPath(cliArgs['set-admin-path']); }
+    catch (e) { console.error('Error: ' + e.message); process.exit(1); }
+    writeEnvKey('ADMIN_PATH', clean);
+    console.log('Admin path updated. Restart to apply: pm2 restart open-folio');
     process.exit(0);
   }
   if ('rotate-secret' in cliArgs) {
@@ -141,7 +165,7 @@ async function main() {
   if (Object.keys(cliArgs).length > 0) {
     await runCli(bcrypt);
     // runCli calls process.exit — only reaches here for unknown flags
-    console.error('Unknown flag. Supported: --set-password=xxx, --rotate-secret, --rotate-api-key');
+    console.error('Unknown flag. Supported: --set-password=xxx, --set-admin-path=xxx, --rotate-secret, --rotate-api-key');
     rl.close();
     process.exit(1);
   }
@@ -157,7 +181,9 @@ async function main() {
     console.log('  Environment         ' + C.cyan + (env.NODE_ENV || 'development') + C.reset);
     console.log('  Admin password      ' + (env.ADMIN_PASSWORD_HASH
       ? C.green + 'set' + C.reset
-      : C.red   + 'NOT SET — admin panel inaccessible' + C.reset));
+      : C.red   + 'NOT SET — admin panel inaccessible remotely' + C.reset));
+    console.log('  Admin path          ' + C.cyan + '/' + (env.ADMIN_PATH || 'admin') + C.reset
+      + (env.ADMIN_PATH ? '' : C.dim + '  (default — no secret gate)' + C.reset));
     console.log('  Session secret      ' + mask(env.SESSION_SECRET));
     console.log('  REST API key        ' + mask(env.API_KEY));
     const curProv = (env.AI_PROVIDER || 'anthropic').toLowerCase();
@@ -180,6 +206,8 @@ async function main() {
     console.log('  ' + C.bold + '[5]' + C.reset + ' Configure AI provider & key');
     console.log('  ' + C.bold + '[6]' + C.reset + ' Show full .env contents   '
       + C.dim + '← reveals secrets, use with care' + C.reset);
+    console.log('  ' + C.bold + '[7]' + C.reset + ' Change admin secret path  '
+      + C.dim + '← type this instead of "admin" to reach /admin/login' + C.reset);
     console.log('  ' + C.bold + '[q]' + C.reset + ' Quit');
     console.log();
     console.log('  ' + C.yellow + '!' + C.reset
@@ -315,6 +343,29 @@ async function main() {
       const raw = fs.readFileSync(ENV_PATH, 'utf8').trimEnd();
       console.log(C.dim + raw + C.reset);
       console.log();
+      await pause();
+
+    // ── [7] Change admin secret path ──────────────────────────────────────────
+    } else if (choice === '7') {
+      console.log(C.bold + '  Change Admin Secret Path' + C.reset);
+      console.log(hr());
+      console.log('  Instead of typing "admin" to reach the login page, visitors type this');
+      console.log('  word instead — e.g. set it to "portal" and /portal takes them to');
+      console.log('  /admin/login. Leave as "admin" to disable this (no secret needed).\n');
+
+      const input = await ask('  New admin path [' + (env.ADMIN_PATH || 'admin') + ']: ');
+      if (!input.trim()) {
+        console.log('  ' + C.dim + '(no change)' + C.reset);
+      } else {
+        try {
+          const clean = validateAdminPath(input);
+          writeEnvKey('ADMIN_PATH', clean);
+          console.log('  ' + tick('Admin path set to "' + clean + '".'));
+          restartHint();
+        } catch (e) {
+          console.log('  ' + warn(e.message));
+        }
+      }
       await pause();
 
     // ── [q] Quit ──────────────────────────────────────────────────────────────

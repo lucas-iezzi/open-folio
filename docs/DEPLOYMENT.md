@@ -121,14 +121,15 @@ npm install --omit=dev
 
 ### Step 4: First-time server setup
 
-Run the setup script on the server to create the `.env` and set your admin password:
+A password is only needed on the server — your local machine never needs one (see [AGENTS.md](AGENTS.md) for how local access bypasses it). Run the setup script **with a password**, since plain `npm run setup` (no arguments) generates a passwordless `.env`, meant for local use only:
 ```bash
-npm run setup
+node scripts/setup.js --password='your-password-here'
 ```
+Optionally add `--admin-path='yourword'` to also require visiting `/yourword` before `/admin/login` becomes reachable (defaults to no secret path). Keep track of what you set — you'll need the admin password to log in.
 
-Keep track of what you set — you'll need the admin password to log in.
+The admin panel's Remote Server tab automates this exact step for you (step 9 of the setup carousel) — the manual command above is only needed if you're not using that.
 
-> To change settings later (password, port, AI key) without restarting, run `node manage.js` on the server.
+> To change settings later (password, admin path, port, AI key) without restarting, run `node manage.js` on the server.
 
 ### Step 5: Push your local content to the server
 
@@ -234,7 +235,7 @@ cd ~/open-folio
 node manage.js
 ```
 
-Options: change admin password, rotate session secret, rotate API key, change port, configure AI.
+Options: change admin password, change admin secret path, rotate session secret, rotate API key, change port, configure AI.
 
 ---
 

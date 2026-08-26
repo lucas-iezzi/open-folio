@@ -14,12 +14,37 @@ const os            = require('os');
 const { spawnSync, spawn } = require('child_process');
 const Database  = require('better-sqlite3');
 const SqliteStore = require('better-sqlite3-session-store')(session);
+const { buildManifest, normalizeRef } = require('./lib/content-manifest');
 
 // ── Startup validation ────────────────────────────────────────────────────────
-if (!process.env.SESSION_SECRET || !process.env.ADMIN_PASSWORD_HASH) {
-  console.error('\n⚠️  Missing environment variables.');
-  console.error('   Run: node scripts/setup.js\n');
-  process.exit(1);
+// No admin password is required to run locally — see isLocalAccess()/requireAuth()
+// below, which skip the password check entirely for localhost/local-IP requests. A
+// password only matters once the site is deployed somewhere reachable from outside,
+// which is set up via the Remote Server tab's setup carousel (writes it to the
+// *remote* .env over SSH), not here. So local first-run just needs a session secret
+// and API key — generate them silently instead of forcing a separate setup step.
+if (!process.env.SESSION_SECRET) {
+  const envPath = path.join(__dirname, '.env');
+  let existing = '';
+  try { existing = fs.readFileSync(envPath, 'utf8'); } catch { /* no .env yet */ }
+  const generated = {
+    SESSION_SECRET: crypto.randomBytes(64).toString('hex'),
+    API_KEY:        crypto.randomBytes(32).toString('hex'),
+  };
+  let content = existing;
+  for (const [key, value] of Object.entries(generated)) {
+    if (new RegExp(`^${key}=`, 'm').test(content)) continue;
+    content = content.replace(/\n*$/, '') + `\n${key}=${value}\n`;
+    process.env[key] = value;
+  }
+  if (!/^PORT=/m.test(content)) content = content.replace(/\n*$/, '') + '\nPORT=3000\n';
+  try {
+    fs.writeFileSync(envPath, content, 'utf8');
+    console.log('  (first run — generated .env with a new session secret and API key)');
+  } catch (e) {
+    console.error('\n⚠️  Could not write .env:', e.message, '\n');
+    process.exit(1);
+  }
 }
 
 const app = express();
@@ -65,6 +90,16 @@ db.exec(`
     org     TEXT    NOT NULL DEFAULT '',
     ts      INTEGER NOT NULL DEFAULT 0
   );
+
+  -- Records every image add/remove on this machine (local or server independently) so
+  -- content sync can show real history, not just current-state snapshots.
+  CREATE TABLE IF NOT EXISTS content_log (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    path   TEXT    NOT NULL,
+    action TEXT    NOT NULL,
+    ts     INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS content_log_ts ON content_log(ts);
 `);
 
 // Migrations for existing DBs
@@ -147,6 +182,15 @@ function getLogos() {
     logoSmallSrc: getSetting('logo_small') || null,
     logoMarkSrc:  getSetting('logo_mark')  || null,
   };
+}
+
+// Best-effort audit trail for image add/remove events, used by the Remote Server tab's
+// content-sync tooling to show recent history. Never let logging failures break the
+// actual operation that triggered it.
+const _insertContentLog = db.prepare('INSERT INTO content_log (path, action, ts) VALUES (?, ?, ?)');
+function logContentChange(action, relPath) {
+  if (!relPath) return;
+  try { _insertContentLog.run(relPath, action, Date.now()); } catch { /* never block on logging */ }
 }
 
 // One-time migration: populate logo settings from files already on disk (pre-upload-UI installs).
@@ -326,8 +370,22 @@ function requireCsrf(req, res, next) {
   next();
 }
 
+// ── Local-access detection ─────────────────────────────────────────────────────
+// Shared by requireAuth (skips the password), the admin-path gate, and requireLocal
+// (guards SSH/deploy commands). Based on the Host header, not the socket address —
+// correct for this app's deployment model, where Caddy reverse-proxies the real
+// domain straight through, so live visitors always arrive with the actual domain as
+// Host while only genuinely local/direct requests show "localhost" or a raw IP. This
+// trust boundary depends on the setup wizard's firewall step keeping port 3000 itself
+// unreachable from outside — only 22/80/443 are opened, so the app is never reachable
+// except through Caddy (or from the machine itself).
+function isLocalAccess(req) {
+  return /^(localhost|127\.0\.0\.1|::1|\[::1\]|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.test(req.hostname);
+}
+
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
+  if (isLocalAccess(req)) return next();
   if (req.session.authenticated === true) return next();
   if (req.xhr || req.headers.accept?.includes('application/json')) {
     return res.status(401).json({ error: 'Unauthorized.' });
@@ -1244,18 +1302,30 @@ REMOTE SERVER TAB — what the user sees and can do:
    Step 6:  Install Caddy — apt install caddy, enable & start service
    Step 7:  Clone repository — git clone https://github.com/lucas-iezzi/open-folio ${remotePath}
    Step 8:  Install dependencies — cd ${remotePath} && npm install --omit=dev
-   Step 9:  First-time server setup — runs scripts/setup.js to create .env + admin password (requires password input)
+   Step 9:  First-time server setup — runs scripts/setup.js to create .env + admin password, plus an optional secret admin path (see AUTH MODEL below)
    Step 10: Start with PM2 — pm2 start scripts/ecosystem.config.js --env production && pm2 save
    Step 11: Configure Caddy — user enters one or more bare domains, comma-separated (e.g. "foo.com, bar.com"); each gets its own www. variant added automatically, and Caddyfile is written with all addresses on one reverse_proxy localhost:3000 block
    Step 12: Point DNS (manual — A record at registrar pointing to server IP)
    Note: Steps 1 and 12 are manual (no SSH command) — their "Mark step done" button only turns the step bubble green; it does not auto-advance the carousel, so the user reviews the instructions at their own pace.
-4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows exact per-file diff, read-only), Backup (downloads everything). On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with "Push to server" / "Pull from server" / "Review details" buttons — nothing is synced automatically without the user clicking one of those.
+4. Content Sync: Push (scp local → server), Pull (scp server → local), Compare (shows exact per-file diff, read-only), Backup (downloads everything). On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with "Push to server" / "Pull from server" / "Review details" buttons — nothing is synced automatically without the user clicking one of those. Every push/pull first diffs local vs remote and transfers only files that actually differ (skips entirely if already in sync); small diffs go file-by-file with independent per-file retry, large/fresh transfers use one recursive scp; either way the result is re-verified against the actual remote/local file listing and retried up to 3 times before giving up, instead of trusting scp's exit code alone. Compare also flags "broken" images (a project references a file that isn't actually there — the real signature of images going missing) and "orphaned" files (unused by any project, safe to delete via a reviewable per-file button) using a content manifest (lib/content-manifest.js, scripts/manifest.js) that requires the remote to have pulled that script via git — content sync (push/pull) never deploys code, only DB + images, so a server that hasn't run "Pull code updates" recently won't have orphan/broken detection yet even though basic push/pull still works.
 5. Server Commands (one-click buttons that run over SSH):
    - Restart site: pm2 restart open-folio
    - View logs: pm2 logs open-folio --lines 80
    - Server status: pm2 status + df -h + uptime
    - Pull code updates: git pull && npm install && pm2 restart open-folio
+   - Change server admin password (same as the setup-carousel field, usable anytime after)
+   - Change admin secret path (same — see AUTH MODEL below)
 6. AI Assistant (this chat): ask anything; you can also request SSH commands (see SSH COMMAND TOOL below).
+
+AUTH MODEL — no password is needed to use the admin panel from the local machine at all
+(localhost/a raw IP) — requireAuth skips the check entirely for local requests. A password
+only matters once the site is deployed somewhere reachable from outside, which is why it's
+configured on the *remote* .env via SSH (setup carousel step 9, or the "Change server admin
+password" command afterward) rather than anywhere local. Separately, ADMIN_PATH (default
+"admin", meaning disabled) lets the live site hide /admin/login behind a secret word —
+e.g. set it to "portal" and visitors must go to /portal first (which sets a session flag)
+before /admin/login stops 404ing for them; local access always skips this too. This
+replaced an older query-string "access token" approach entirely.
 
 IMPORTANT PATHS ON THE SERVER:
 - App root: ${remotePath}
@@ -1268,7 +1338,7 @@ IMPORTANT PATHS ON THE SERVER:
 
 MANAGE.JS (run on server to change config):
   cd ${remotePath} && node manage.js
-  Changes admin password, rotates session secret/API key, changes port, configures AI provider. Always run: pm2 restart open-folio after.
+  Changes admin password, admin secret path, rotates session secret/API key, changes port, configures AI provider. Always run: pm2 restart open-folio after.
 
 KEY SETUP COMMANDS (manual fallback):
   # Install Node.js 22:
@@ -1441,15 +1511,23 @@ app.get('/projects/:slug', (req, res, next) => {
 // ADMIN AUTH ROUTES  (no requireAuth — these are the login/logout gates)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Default admin path — the literal /admin/* routes below always exist (nothing else
+// in this file changes), but when ADMIN_PATH is set to something else on this machine,
+// /admin/login itself starts 404ing for non-local visitors unless they've first hit the
+// secret path (see the gate route near the bottom of this file), which sets
+// req.session.adminGateOk. Local access always skips this — the secret path only
+// matters for the live site.
+function getAdminPath() { return process.env.ADMIN_PATH || 'admin'; }
+
 app.get('/admin', (req, res) => {
-  if (req.session.authenticated) return res.redirect('/admin/dashboard');
+  if (isLocalAccess(req) || req.session.authenticated) return res.redirect('/admin/dashboard');
   res.redirect('/admin/login');
 });
 
 app.get('/admin/login', (req, res) => {
+  if (isLocalAccess(req)) return res.redirect('/admin/dashboard');
   if (req.session.authenticated) return res.redirect('/admin/dashboard');
-  const tok = process.env.ADMIN_ACCESS_TOKEN;
-  if (tok && req.query.token !== tok) return res.status(404).end();
+  if (getAdminPath() !== 'admin' && !req.session.adminGateOk) return res.status(404).end();
   res.render('admin/login', { error: null, csrfToken: getCsrfToken(req), ...getLogos() });
 });
 
@@ -1465,7 +1543,7 @@ app.post('/admin/login', loginLimiter, async (req, res) => {
     });
   }
 
-  const valid = typeof password === 'string' &&
+  const valid = typeof password === 'string' && !!process.env.ADMIN_PASSWORD_HASH &&
     await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH);
 
   if (!valid) {
@@ -1711,8 +1789,7 @@ function writeServerConfig(cfg) {
 }
 
 const requireLocal = (req, res, next) => {
-  if (!/^(localhost|127\.0\.0\.1|::1|\[::1\]|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.test(req.hostname))
-    return res.status(403).json({ error: 'Only available from localhost.' });
+  if (!isLocalAccess(req)) return res.status(403).json({ error: 'Only available from localhost.' });
   next();
 };
 
@@ -1824,9 +1901,29 @@ const SSH_CMDS = {
   ufw_setup:        ()             => 'sudo ufw allow 22 && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw --force enable && sudo ufw status',
   caddy_install:    ()             => "sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt update && sudo apt install caddy -y && sudo systemctl enable caddy && sudo systemctl start caddy && caddy version",
   caddy_configure:  (rp, addresses) => `printf '${shEsc(addresses)} {\\n  reverse_proxy localhost:3000\\n}\\n' | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy && sudo systemctl status caddy --no-pager`,
-  server_setup:     (rp, password) => `cd "${xrp(rp)}" && node scripts/setup.js --password='${shEsc(password)}'`,
+  server_setup:     (rp, password, adminPath) => `cd "${xrp(rp)}" && node scripts/setup.js --password='${shEsc(password)}'${adminPath ? ` --admin-path='${shEsc(adminPath)}'` : ''}`,
   manage_password:  (rp, password) => `cd "${xrp(rp)}" && node manage.js --set-password='${shEsc(password)}' && pm2 restart open-folio`,
+  set_admin_path:   (rp, adminPath) => `cd "${xrp(rp)}" && node manage.js --set-admin-path='${shEsc(adminPath)}' && pm2 restart open-folio`,
 };
+
+// "admin" is always allowed — it's the sentinel meaning "no secret path configured",
+// letting someone undo a custom one. Everything else here is a real route/asset path
+// that a custom admin path can't be allowed to shadow.
+const RESERVED_ADMIN_PATHS = new Set([
+  'projects', 'sandbox', 'api', 'robots.txt', 'logo-size.css', 'sandbox-active.css',
+  'images', 'js', 'css', 'public', 'login', 'logout', 'dashboard',
+]);
+function parseAdminPath(raw) {
+  const clean = String(raw).trim().toLowerCase();
+  if (!clean) return { error: 'Admin path required.' };
+  if (!/^[a-z0-9][a-z0-9-]{2,39}$/.test(clean)) {
+    return { error: 'Admin path must be 3-40 characters: lowercase letters, numbers, and hyphens only.' };
+  }
+  if (clean !== 'admin' && RESERVED_ADMIN_PATHS.has(clean)) {
+    return { error: `"${clean}" is a reserved path and can't be used.` };
+  }
+  return { path: clean };
+}
 
 // Parses a comma-separated list of bare domains (e.g. "foo.com, bar.com") into
 // a deduped Caddy address list that includes both the bare and www. form of each.
@@ -1849,7 +1946,7 @@ function parseDomains(raw) {
 // Builds the SSH command for a setup-carousel step, shared by ssh-run and
 // ssh-run-stream so the git_clone/caddy_configure/password validation logic
 // lives in exactly one place.
-function resolveSshCommand(command, rp, { repoUrl, domain, password } = {}) {
+function resolveSshCommand(command, rp, { repoUrl, domain, password, adminPath } = {}) {
   if (command === 'git_clone') {
     if (!repoUrl || !repoUrl.trim()) return { error: 'repoUrl required for git_clone.' };
     return { cmd: SSH_CMDS.git_clone(rp, repoUrl.trim()) };
@@ -1860,9 +1957,25 @@ function resolveSshCommand(command, rp, { repoUrl, domain, password } = {}) {
     if (error) return { error };
     return { cmd: SSH_CMDS.caddy_configure(rp, addresses.join(', ')) };
   }
-  if (command === 'server_setup' || command === 'manage_password') {
+  if (command === 'server_setup') {
+    if (!password || String(password).length < 10) return { error: 'Password must be at least 10 characters.' };
+    let cleanAdminPath;
+    if (adminPath && adminPath.trim()) {
+      const { path: p, error } = parseAdminPath(adminPath);
+      if (error) return { error };
+      cleanAdminPath = p;
+    }
+    return { cmd: SSH_CMDS.server_setup(rp, String(password), cleanAdminPath) };
+  }
+  if (command === 'manage_password') {
     if (!password || String(password).length < 10) return { error: 'Password must be at least 10 characters.' };
     return { cmd: SSH_CMDS[command](rp, String(password)) };
+  }
+  if (command === 'set_admin_path') {
+    if (!adminPath || !adminPath.trim()) return { error: 'Admin path required.' };
+    const { path: cleanAdminPath, error } = parseAdminPath(adminPath);
+    if (error) return { error };
+    return { cmd: SSH_CMDS.set_admin_path(rp, cleanAdminPath) };
   }
   return { cmd: SSH_CMDS[command](rp) };
 }
@@ -1907,7 +2020,7 @@ app.get('/admin/dashboard', requireAuth, (req, res) => {
     "base-uri 'self'"
   );
   // Show Deploy tab only when accessed locally (localhost or direct IP, not via a real domain)
-  const isLocalAccess = /^(localhost|127\.0\.0\.1|::1|\[::1\]|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.test(req.hostname);
+  const localAccess = isLocalAccess(req);
   res.render('admin/index', {
     projects:      sortedProjects(),
     activity:      getActivityStats(),
@@ -1915,12 +2028,11 @@ app.get('/admin/dashboard', requireAuth, (req, res) => {
     flash:         req.query.msg || null,
     aiStatus:      aiStatus(),
     providers:     PROVIDERS,
-    isLocalAccess,
+    isLocalAccess: localAccess,
     siteName:      getSetting('site_name')    || '',
     siteTagline:   getSetting('site_tagline') || '',
     logoNavSize:      parseInt(getSetting('logo_nav_size')) || 52,
     serverConfig:     readServerConfig().server || {},
-    hasAccessToken:   !!process.env.ADMIN_ACCESS_TOKEN,
     ...getLogos(),
   });
 });
@@ -1963,9 +2075,11 @@ app.post('/admin/settings/logo', requireAuth, requireCsrf, logoUpload.single('im
   const oldPath = getSetting(settingKey);
   if (oldPath) {
     try { fs.unlinkSync(path.join(__dirname, 'public', oldPath.replace(/^\//, ''))); } catch {}
+    logContentChange('removed', normalizeRef(oldPath));
   }
   const webPath = '/images/logos/' + req.file.filename;
   setSetting(settingKey, webPath);
+  logContentChange('added', normalizeRef(webPath));
   res.json({ ok: true, src: webPath });
 });
 
@@ -1977,6 +2091,7 @@ app.delete('/admin/settings/logo/:type', requireAuth, requireCsrf, (req, res) =>
   const oldPath = getSetting(settingKey);
   if (oldPath) {
     try { fs.unlinkSync(path.join(__dirname, 'public', oldPath.replace(/^\//, ''))); } catch {}
+    logContentChange('removed', normalizeRef(oldPath));
     deleteSetting(settingKey);
   }
   res.json({ ok: true });
@@ -2009,15 +2124,6 @@ app.post('/admin/settings/password', requireAuth, requireCsrf, async (req, res) 
   res.json({ ok: true });
 });
 
-// POST /admin/settings/access-token — set or clear the secret access word
-app.post('/admin/settings/access-token', requireAuth, requireCsrf, (req, res) => {
-  const { token } = req.body;
-  if (typeof token !== 'string') return res.status(400).json({ error: 'Invalid request.' });
-  const clean = token.trim();
-  if (clean && clean.length < 6) return res.status(400).json({ error: 'Token must be at least 6 characters, or leave blank to disable.' });
-  updateEnvFile('ADMIN_ACCESS_TOKEN', clean);
-  res.json({ ok: true });
-});
 
 // ── Remote Server / Deploy routes (local access only) ────────────────────────
 app.get('/admin/deploy/config', requireAuth, requireLocal, (req, res) => {
@@ -2082,12 +2188,12 @@ app.get('/admin/deploy/local-pubkey', requireAuth, requireLocal, (req, res) => {
 });
 
 app.post('/admin/deploy/ssh-run', requireAuth, requireCsrf, requireLocal, (req, res) => {
-  const { command, repoUrl, domain, password } = req.body;
+  const { command, repoUrl, domain, password, adminPath } = req.body;
   if (!SSH_CMDS[command]) return res.status(400).json({ error: 'Unknown command.' });
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
   const rp = srv.remotePath || '~/open-folio';
-  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password });
+  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password, adminPath });
   if (error) return res.status(400).json({ error });
   const slowCmds = new Set(['apt_update', 'node_install', 'caddy_install', 'server_setup']);
   const timeout = slowCmds.has(command) ? 180000 : 60000;
@@ -2097,12 +2203,12 @@ app.post('/admin/deploy/ssh-run', requireAuth, requireCsrf, requireLocal, (req, 
 
 // Same as ssh-run but streams output line-by-line as NDJSON for live terminal preview
 app.post('/admin/deploy/ssh-run-stream', requireAuth, requireCsrf, requireLocal, (req, res) => {
-  const { command, repoUrl, domain, password } = req.body;
+  const { command, repoUrl, domain, password, adminPath } = req.body;
   if (!SSH_CMDS[command]) return res.status(400).json({ error: 'Unknown command.' });
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
   const rp = srv.remotePath || '~/open-folio';
-  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password });
+  const { cmd, error } = resolveSshCommand(command, rp, { repoUrl, domain, password, adminPath });
   if (error) return res.status(400).json({ error });
 
   const { host, user, sshPort = 22 } = srv;
@@ -2161,8 +2267,14 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
   const dbCmd  = `stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo __missing__`;
   const imgCmd = `find "${erp}/public/images" -type f -printf '%P\t%s\n' 2>/dev/null | sort`;
 
-  const dbResult  = sshExec(srv, dbCmd,  20000);
-  const imgResult = sshExec(srv, imgCmd, 30000);
+  // scripts/manifest.js reports which files each side's own database actually references
+  // vs. which are orphaned/broken there. Requires the remote to have pulled it via git —
+  // gracefully degrades to the plain file diff below if it's missing or fails.
+  const manifestCmd = `cd "${erp}" && node scripts/manifest.js 2>/dev/null`;
+
+  const dbResult       = sshExec(srv, dbCmd,  20000);
+  const imgResult      = sshExec(srv, imgCmd, 30000);
+  const manifestResult = sshExec(srv, manifestCmd, 30000);
 
   if (!dbResult.ok && !imgResult.ok) {
     return res.json({ ok: false, error: `SSH failed: ${dbResult.stderr || dbResult.err || 'connection error'}`, items: [] });
@@ -2243,16 +2355,101 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
     items.push({ id: `images/${groupId}`, label, hint, direction });
   }
 
-  res.json({ ok: true, items });
+  // ── Orphans (side-only files not referenced by that side's own content — safe to
+  // delete) and broken references (referenced by a project but the file is missing —
+  // this is what "images disappearing" looks like). Best-effort: needs scripts/manifest.js
+  // on the remote (deployed via git pull), so it degrades gracefully on older deploys. ──
+  const orphans = [];
+  const broken  = [];
+  const recentLog = { local: [], remote: [] };
+  try {
+    const localManifest = buildManifest({ dbPath: DB_PATH, imagesDir: localImgBase });
+    recentLog.local = localManifest.recentLog;
+    for (const relPath of localManifest.missing) broken.push({ side: 'local', path: relPath });
+
+    const localOrphanSet = new Set(localManifest.orphaned);
+    for (const [relPath] of localFiles) {
+      if (!remoteFiles.has(relPath) && localOrphanSet.has(relPath)) orphans.push({ side: 'local', path: relPath });
+    }
+
+    if (manifestResult.ok && manifestResult.stdout) {
+      let remoteManifest = null;
+      try { remoteManifest = JSON.parse(manifestResult.stdout); } catch { /* remote script missing/old — skip */ }
+      if (remoteManifest) {
+        recentLog.remote = remoteManifest.recentLog || [];
+        for (const relPath of (remoteManifest.missing || [])) broken.push({ side: 'remote', path: relPath });
+
+        const remoteOrphanSet = new Set(remoteManifest.orphaned || []);
+        for (const [relPath] of remoteFiles) {
+          if (!localFiles.has(relPath) && remoteOrphanSet.has(relPath)) orphans.push({ side: 'remote', path: relPath });
+        }
+      }
+    }
+  } catch { /* manifest computation is a bonus, never break Compare itself */ }
+
+  res.json({ ok: true, items, orphans, broken, recentLog });
 });
 
-// Pushes/pulls a single item (db | images/logos | images/projects[/slug]), then verifies
-// the transfer by diffing local vs remote file listings and retries (re-running scp, not
-// just re-checking) up to SYNC_MAX_ATTEMPTS times until every file actually matches.
-// Streams NDJSON progress lines so the UI can show what's happening in real time instead
-// of just a spinner — this is what previously made "successful" pushes silently drop a
-// handful of images: scp exiting 0 was trusted as proof the files arrived, with no check
-// that they actually had.
+// Deletes files that Compare flagged as orphaned (present on one side only, and not
+// referenced by that side's own project/logo data). Re-checks each path is STILL
+// orphaned right now — never trusts a client-supplied list blindly, since content may
+// have changed since the Compare that produced it ran.
+const ORPHAN_PATH_RE = /^(projects\/[a-z0-9-]+\/[a-z0-9_.()+-]+\.(jpg|jpeg|png|gif|webp)|logos\/[a-z0-9_.()+-]+\.(jpg|jpeg|png|gif|webp|svg))$/i;
+
+app.post('/admin/deploy/cleanup-orphans', requireAuth, requireCsrf, requireLocal, (req, res) => {
+  const { side, paths } = req.body;
+  if (side !== 'local' && side !== 'remote') return res.status(400).json({ error: 'Invalid side.' });
+  if (!Array.isArray(paths) || !paths.length) return res.status(400).json({ error: 'paths required.' });
+  const validPaths = paths.filter(p => typeof p === 'string' && ORPHAN_PATH_RE.test(p));
+  if (!validPaths.length) return res.status(400).json({ error: 'No valid paths.' });
+
+  const srv = readServerConfig().server;
+  if (side === 'remote' && (!srv || !srv.host)) return res.status(400).json({ error: 'No server configured.' });
+
+  const results = [];
+
+  if (side === 'local') {
+    const localManifest = buildManifest({ dbPath: DB_PATH, imagesDir: path.join(__dirname, 'public', 'images') });
+    const localOrphanSet = new Set(localManifest.orphaned);
+    for (const relPath of validPaths) {
+      if (!localOrphanSet.has(relPath)) { results.push({ path: relPath, ok: false, reason: 'No longer orphaned — skipped.' }); continue; }
+      try {
+        fs.unlinkSync(path.join(__dirname, 'public', 'images', relPath));
+        logContentChange('removed', relPath);
+        results.push({ path: relPath, ok: true });
+      } catch (err) {
+        results.push({ path: relPath, ok: false, reason: err.message });
+      }
+    }
+  } else {
+    const { remotePath = '~/open-folio' } = srv;
+    const erp = xrp(remotePath);
+    const manifestCheck = sshExec(srv, `cd "${erp}" && node scripts/manifest.js 2>/dev/null`, 30000);
+    let remoteOrphanSet = new Set();
+    if (manifestCheck.ok && manifestCheck.stdout) {
+      try { remoteOrphanSet = new Set(JSON.parse(manifestCheck.stdout).orphaned || []); } catch { /* treat as empty — nothing verified as orphaned */ }
+    }
+    for (const relPath of validPaths) {
+      if (!remoteOrphanSet.has(relPath)) { results.push({ path: relPath, ok: false, reason: 'No longer orphaned — skipped.' }); continue; }
+      const r = sshExec(srv, `rm -f "${erp}/public/images/${relPath}"`, 20000);
+      if (r.ok) logContentChange('removed', `${relPath} (deleted on server)`);
+      results.push({ path: relPath, ok: r.ok, reason: r.ok ? undefined : (r.stderr || r.err || 'rm failed') });
+    }
+  }
+
+  res.json({ ok: results.every(r => r.ok), results });
+});
+
+// Pushes/pulls a single item (db | images/logos | images/projects[/slug]). Always diffs
+// local vs remote FIRST — an already-matching DB or a file whose size is unchanged on
+// both sides is never re-transferred. For images, only the files that actually differ are
+// sent: individually (with their own independent retry) when it's a handful of changes,
+// or via one recursive scp for large/fresh transfers where hundreds of separate SSH
+// round trips would be slower and less reliable than a single one. Every transfer step
+// (DB and each image file) is re-verified against the real remote/local file listing and
+// retried up to SYNC_MAX_ATTEMPTS times before giving up — never trusts scp's exit code
+// alone, which is what previously let "successful" pushes silently drop some images.
+// Streams NDJSON progress the whole way so the UI can show real-time status.
 const SYNC_MAX_ATTEMPTS = 3;
 
 app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, async (req, res) => {
@@ -2274,54 +2471,138 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
   res.flushHeaders();
   const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch {} };
 
-  let ok = false;
-  let detail = null;
-
-  for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
-    send({ stage: 'transfer', attempt, maxAttempts: SYNC_MAX_ATTEMPTS });
-
-    const transfer = isDb
-      ? (direction === 'push'
-          ? await scpRunAsync('data/portfolio.db', `${remote}:${remotePath}/data/`, sshPort, false, 60000)
-          : await scpRunAsync(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000))
-      : (direction === 'push'
-          ? await scpRunAsync(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
-          : await scpRunAsync(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000));
-
-    if (!transfer.ok) {
-      detail = { reason: 'transfer', message: transfer.stderr || transfer.err || 'scp exited with an error' };
-      send({ stage: 'transfer-failed', attempt, detail });
-    } else {
-      send({ stage: 'verify', attempt });
-
-      if (isDb) {
-        const localPath  = path.join(__dirname, 'data', 'portfolio.db');
-        const localSize  = fs.existsSync(localPath) ? fs.statSync(localPath).size : -1;
-        const remoteStat = await sshExecAsync(srv, `stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo -1`, 20000);
-        const remoteSize = parseInt((remoteStat.stdout || '').trim(), 10);
-        ok     = localSize >= 0 && remoteSize >= 0 && localSize === remoteSize;
-        detail = { reason: 'verify', localSize, remoteSize };
-      } else {
-        const localMap  = listLocalTree(path.join(__dirname, 'public', 'images', rel));
-        const remoteMap = await listRemoteTree(srv, `${erp}/public/images/${rel}`, 60000);
-        const missing   = [];
-        if (direction === 'push') {
-          for (const [f, size] of localMap)  if (remoteMap.get(f) !== size) missing.push(f);
-        } else {
-          for (const [f, size] of remoteMap) if (localMap.get(f) !== size) missing.push(f);
-        }
-        ok     = missing.length === 0;
-        detail = { reason: 'verify', missing, totalChecked: direction === 'push' ? localMap.size : remoteMap.size };
-      }
-
-      send({ stage: 'verify-done', attempt, ok, detail });
+  // Retries a single transfer step up to SYNC_MAX_ATTEMPTS times. Used both for the
+  // whole-file DB transfer and for individual image files, so one bad file only costs
+  // its own retries instead of forcing a retry of everything else too.
+  async function withRetry(label, runOnce) {
+    let result;
+    for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+      result = await runOnce();
+      if (result.ok) return { ok: true, attempts: attempt };
+      if (attempt < SYNC_MAX_ATTEMPTS) send({ stage: 'retrying', label, nextAttempt: attempt + 1, maxAttempts: SYNC_MAX_ATTEMPTS });
     }
-
-    if (ok) break;
-    if (attempt < SYNC_MAX_ATTEMPTS) send({ stage: 'retrying', nextAttempt: attempt + 1, maxAttempts: SYNC_MAX_ATTEMPTS });
+    return { ok: false, attempts: SYNC_MAX_ATTEMPTS, error: result.stderr || result.err || 'transfer failed' };
   }
 
-  send({ done: true, ok, detail });
+  if (isDb) {
+    const localPath   = path.join(__dirname, 'data', 'portfolio.db');
+    const localExists = fs.existsSync(localPath);
+    const localSize   = localExists ? fs.statSync(localPath).size : -1;
+
+    send({ stage: 'checking' });
+    const remoteStat  = await sshExecAsync(srv, `stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo -1`, 20000);
+    const remoteSize  = parseInt((remoteStat.stdout || '').trim(), 10);
+
+    // Already identical — nothing to transfer. This is the common case on repeat syncs.
+    if (localExists && remoteSize >= 0 && localSize === remoteSize) {
+      send({ done: true, ok: true, detail: { skipped: true, reason: 'Database already matches — nothing to transfer.' } });
+      return res.end();
+    }
+    if (direction === 'push' && !localExists) {
+      send({ done: true, ok: false, detail: { reason: 'Local database not found.' } });
+      return res.end();
+    }
+    if (direction === 'pull' && remoteSize < 0) {
+      send({ done: true, ok: false, detail: { reason: 'Remote database not found.' } });
+      return res.end();
+    }
+
+    send({ stage: 'transfer', attempt: 1, maxAttempts: SYNC_MAX_ATTEMPTS });
+    const xfer = await withRetry('Database', () => direction === 'push'
+      ? scpRunAsync('data/portfolio.db', `${remote}:${remotePath}/data/`, sshPort, false, 60000)
+      : scpRunAsync(`${remote}:${remotePath}/data/portfolio.db`, 'data/', sshPort, false, 60000));
+
+    if (!xfer.ok) {
+      send({ done: true, ok: false, detail: { reason: xfer.error } });
+      return res.end();
+    }
+
+    send({ stage: 'verify' });
+    const recheck = await sshExecAsync(srv, `stat -c '%s' "${erp}/data/portfolio.db" 2>/dev/null || echo -1`, 20000);
+    const finalRemoteSize = parseInt((recheck.stdout || '').trim(), 10);
+    const finalLocalSize  = fs.existsSync(localPath) ? fs.statSync(localPath).size : -1;
+    const ok = finalLocalSize >= 0 && finalRemoteSize >= 0 && finalLocalSize === finalRemoteSize;
+    send({ done: true, ok, detail: { localSize: finalLocalSize, remoteSize: finalRemoteSize, attempts: xfer.attempts } });
+    return res.end();
+  }
+
+  // ── Images: diff first, then only transfer files that actually differ ──
+  send({ stage: 'checking' });
+  const localBase  = path.join(__dirname, 'public', 'images', rel);
+  const localMap   = listLocalTree(localBase);
+  const remoteBase = `${erp}/public/images/${rel}`;
+  const remoteMap  = await listRemoteTree(srv, remoteBase, 60000);
+
+  const toTransfer = [];
+  if (direction === 'push') {
+    for (const [f, size] of localMap)  if (remoteMap.get(f) !== size) toTransfer.push(f);
+  } else {
+    for (const [f, size] of remoteMap) if (localMap.get(f) !== size) toTransfer.push(f);
+  }
+
+  const srcTotal = direction === 'push' ? localMap.size : remoteMap.size;
+  const dstTotal = direction === 'push' ? remoteMap.size : localMap.size;
+
+  if (toTransfer.length === 0) {
+    send({ done: true, ok: true, detail: { skipped: true, reason: 'Already in sync — no transfer needed.', totalChecked: srcTotal } });
+    return res.end();
+  }
+
+  send({ stage: 'diff-found', count: toTransfer.length, total: srcTotal });
+
+  // Transferring most/all of a large tree file-by-file over separate SSH connections is
+  // slower and adds more points of failure than one recursive scp — use that for bulk
+  // transfers (fresh server, big batch of new content) and fall back to per-file only
+  // for the common steady-state case where just a handful of files actually changed.
+  const useBulk = dstTotal === 0 || toTransfer.length > 40 || (srcTotal > 0 && toTransfer.length / srcTotal >= 0.4);
+  const failed = [];
+
+  if (useBulk) {
+    send({ stage: 'transfer', mode: 'bulk', attempt: 1, maxAttempts: SYNC_MAX_ATTEMPTS });
+    const xfer = await withRetry(rel, () => direction === 'push'
+      ? scpRunAsync(`public/images/${rel}`, `${remote}:${remotePath}/public/images/`, sshPort, true, 300000)
+      : scpRunAsync(`${remote}:${remotePath}/public/images/${rel}`, 'public/images/', sshPort, true, 300000));
+    if (!xfer.ok) {
+      send({ done: true, ok: false, detail: { reason: xfer.error } });
+      return res.end();
+    }
+  } else {
+    // Push needs the destination directories to exist before scp'ing individual files into them.
+    if (direction === 'push') {
+      const dirs = new Set();
+      for (const f of toTransfer) {
+        const d = path.posix.dirname(f);
+        dirs.add(d === '.' ? remoteBase : `${remoteBase}/${d}`);
+      }
+      await sshExecAsync(srv, 'mkdir -p ' + [...dirs].map(d => `"${d}"`).join(' '), 20000);
+    }
+
+    for (let i = 0; i < toTransfer.length; i++) {
+      const f = toTransfer[i];
+      send({ stage: 'transfer', mode: 'file', file: f, index: i + 1, count: toTransfer.length });
+
+      const localFull  = path.join(localBase, f);
+      const remoteFull = `${remote}:${remotePath}/public/images/${rel}/${f}`;
+      if (direction === 'pull') fs.mkdirSync(path.dirname(localFull), { recursive: true });
+
+      const xfer = await withRetry(f, () => direction === 'push'
+        ? scpRunAsync(localFull, remoteFull, sshPort, false, 30000)
+        : scpRunAsync(remoteFull, localFull, sshPort, false, 30000));
+
+      if (!xfer.ok) {
+        failed.push({ file: f, error: xfer.error });
+        send({ stage: 'file-failed', file: f, error: xfer.error });
+      }
+    }
+  }
+
+  send({ stage: 'verify' });
+  const localMap2  = listLocalTree(localBase);
+  const remoteMap2 = await listRemoteTree(srv, remoteBase, 60000);
+  const stillMissing = toTransfer.filter(f => localMap2.get(f) !== remoteMap2.get(f));
+
+  const ok = stillMissing.length === 0;
+  send({ done: true, ok, detail: { totalChecked: toTransfer.length, missing: stillMissing, failedTransfers: failed } });
   res.end();
 });
 
@@ -2687,6 +2968,7 @@ app.post('/admin/upload/:slug', requireAuth, (req, res, next) => {
 
     const { safeSlug } = safeImageDir(req.params.slug);
     const relativePath = `/images/projects/${safeSlug}/${req.file.filename}`;
+    logContentChange('added', normalizeRef(relativePath));
     res.json({ path: relativePath });
   });
 });
@@ -2706,6 +2988,7 @@ app.post('/admin/image/delete', requireAuth, requireCsrf, (req, res) => {
 
   try {
     if (fs.existsSync(resolved)) fs.unlinkSync(resolved);
+    logContentChange('removed', normalizeRef(imagePath));
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: 'Could not delete file.' });
@@ -3199,7 +3482,10 @@ app.post('/admin/studio/publish', requireAuth, requireCsrf, (req, res) => {
     const srcPath  = path.join(STUDIO_TEMP_BASE, studio.tempId, filename);
     const dstPath  = path.join(destDir, filename);
     try {
-      if (fs.existsSync(srcPath)) fs.renameSync(srcPath, dstPath);
+      if (fs.existsSync(srcPath)) {
+        fs.renameSync(srcPath, dstPath);
+        logContentChange('added', normalizeRef(`/images/projects/${slug}/${filename}`));
+      }
     } catch { /* file may already be moved */ }
     return `/images/projects/${slug}/${filename}`;
   };
@@ -3259,7 +3545,12 @@ app.post('/admin/studio/save-draft', requireAuth, requireCsrf, (req, res) => {
     const filename = path.basename(src);
     const srcPath  = path.join(STUDIO_TEMP_BASE, studio.tempId, filename);
     const dstPath  = path.join(destDir, filename);
-    try { if (fs.existsSync(srcPath)) fs.renameSync(srcPath, dstPath); } catch {}
+    try {
+      if (fs.existsSync(srcPath)) {
+        fs.renameSync(srcPath, dstPath);
+        logContentChange('added', normalizeRef(`/images/projects/${slug}/${filename}`));
+      }
+    } catch {}
     return `/images/projects/${slug}/${filename}`;
   };
 
@@ -4070,6 +4361,20 @@ function sanitizeSections(sections, { allowTemp = false } = {}) {
       : [],
   }));
 }
+
+// Secret admin path — when ADMIN_PATH is configured to something other than the
+// default "admin", visiting that word takes you to the admin login (or straight to the
+// dashboard if already signed in) and remembers it for the rest of the browser session
+// via req.session.adminGateOk, so /admin/login doesn't need the secret on every single
+// request. Matches only a single path segment not already claimed by a route defined
+// above, so it can never shadow a real page or static asset — an unrelated word just
+// falls through to the same 404 everything else gets.
+app.get('/:secretGate', (req, res, next) => {
+  const configured = getAdminPath();
+  if (configured === 'admin' || req.params.secretGate !== configured) return next();
+  req.session.adminGateOk = true;
+  res.redirect('/admin');
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ERROR HANDLERS

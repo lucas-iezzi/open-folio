@@ -14,7 +14,7 @@ Node.js is installed automatically if needed. The launcher walks you through the
 Once running, open:
 
 - **Portfolio:** `http://localhost:3000`
-- **Admin panel:** `http://localhost:3000/admin/login`
+- **Admin panel:** `http://localhost:3000/admin/dashboard` — no password needed on your own machine
 
 ### Manual start
 
@@ -24,7 +24,7 @@ cd open-folio
 node launcher.js
 ```
 
-The launcher handles first-time setup (generates secrets, sets your admin password) and keeps the server running.
+The launcher generates a session secret on first run and keeps the server running — no setup step required. A password is only needed once you deploy somewhere publicly reachable, which you set up from the admin panel's Remote Server tab.
 
 ---
 

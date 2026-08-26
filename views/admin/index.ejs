@@ -583,29 +583,9 @@
         </form>
       </div>
 
-      <div class="settings-section" style="margin-top:2rem">
-        <div class="settings-section-title">Secret Access Word</div>
-        <p class="settings-section-desc">When set, the admin login page is hidden — it only appears when the secret word is included in the URL as <code>?token=yourword</code>. Leave blank to disable (login page is always visible). Takes effect immediately.</p>
-        <form id="access-token-form" style="display:grid;gap:1rem;max-width:420px;margin-top:1rem">
-          <div>
-            <label for="access-token-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">
-              Secret word <span style="font-weight:400;color:var(--muted);font-size:.8rem">(min 6 characters, or blank to disable)</span>
-            </label>
-            <input type="text" id="access-token-input" autocomplete="off" spellcheck="false"
-                   placeholder="leave blank to disable"
-                   style="width:100%;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
-          </div>
-          <% if (hasAccessToken) { %>
-          <p style="font-size:.8rem;color:var(--muted);margin:0">Currently <strong style="color:var(--text)">enabled</strong>. Your admin login URL: <code>/admin/login?token=<span style="font-style:italic">your-word</span></code></p>
-          <% } else { %>
-          <p style="font-size:.8rem;color:var(--muted);margin:0">Currently <strong style="color:var(--text)">disabled</strong> — login page is publicly accessible.</p>
-          <% } %>
-          <div style="display:flex;align-items:center;gap:.75rem">
-            <button type="submit" class="btn btn-primary btn-sm">Save</button>
-            <span id="access-token-feedback" style="font-size:.8rem;color:var(--muted)" aria-live="polite"></span>
-          </div>
-        </form>
-      </div>
+      <% if (isLocalAccess) { %>
+      <p style="font-size:.8rem;color:var(--muted);margin-top:2rem">No password is required to access this admin panel from your local machine. The password above only matters once your site is live — set it (and a secret admin path) from the <strong>Remote Server</strong> tab.</p>
+      <% } %>
 
     </div><!-- /tab-settings -->
 
@@ -778,7 +758,7 @@ sudo systemctl enable caddy && sudo systemctl start caddy</pre>
                 </div>
 
                 <!-- Step 9: First-time setup -->
-                <div class="rs-step-panel" data-step="8" data-cmd="server_setup" data-needs-password="true">
+                <div class="rs-step-panel" data-step="8" data-cmd="server_setup" data-needs-password="true" data-needs-admin-path="true">
                   <div class="rs-sp-head"><span class="rs-step-num">9</span><span class="rs-sp-title">First-time server setup</span></div>
                   <div class="rs-sp-body">
                     <p>Creates the <code>.env</code> file on the server with your chosen admin password. Enter the password you want to use to log into the admin panel.</p>
@@ -786,6 +766,11 @@ sudo systemctl enable caddy && sudo systemctl start caddy</pre>
                       <label class="rs-label">Admin password (min 10 characters)</label>
                       <input id="rs-setup-password" type="password" class="rs-input" placeholder="Choose a strong password" autocomplete="new-password">
                     </div>
+                    <div class="rs-field" style="margin-top:.75rem;max-width:320px">
+                      <label class="rs-label">Secret admin path <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+                      <input id="rs-setup-adminpath" type="text" class="rs-input" placeholder="admin" autocomplete="off" spellcheck="false">
+                    </div>
+                    <p style="margin-top:.6rem;font-size:.82rem;color:var(--muted)">By default, visiting <code>/admin</code> reaches the login page. Set a word here (e.g. <code>portal</code>) and visitors have to type <code>/portal</code> instead — <code>/admin</code> itself stops working. Leave blank to keep the default. Can be changed later in Server Commands below.</p>
                     <p style="margin-top:.6rem;font-size:.82rem;color:var(--muted)">This also runs on the server via SSH — or run manually: <code>node scripts/setup.js</code></p>
                   </div>
                 </div>
@@ -928,6 +913,13 @@ TTL:   Auto or 3600</pre>
                 <div class="rs-manage-inner">
                   <input id="rs-manage-password" type="password" class="rs-input rs-input--sm" placeholder="New password (min 10 chars)" autocomplete="new-password">
                   <button id="rs-manage-pw-btn" class="btn btn-secondary btn-sm" data-cmd="manage_password" data-needs-password="manage">Change</button>
+                </div>
+              </div>
+              <div class="rs-manage-row">
+                <span class="rs-manage-label">Change admin secret path</span>
+                <div class="rs-manage-inner">
+                  <input id="rs-manage-adminpath" type="text" class="rs-input rs-input--sm" placeholder="admin" autocomplete="off" spellcheck="false">
+                  <button id="rs-manage-adminpath-btn" class="btn btn-secondary btn-sm">Change</button>
                 </div>
               </div>
               <div class="rs-ssh-row">

@@ -1,5 +1,5 @@
 @echo off
-title open-folio Launcher
+title open-folio
 cd /d "%~dp0"
 
 where node >nul 2>&1
@@ -46,9 +46,5 @@ if %errorlevel% neq 0 (
 )
 
 :launch
-node "%~dp0scripts\launcher-server.js"
-if %errorlevel% gtr 1 (
-    echo.
-    echo   Launcher exited with an error. See above for details.
-    pause
-)
+node "%~dp0scripts\start.js"
+if %errorlevel% neq 0 pause

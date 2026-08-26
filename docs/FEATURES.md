@@ -32,19 +32,18 @@ Access at `/admin/login`. Everything you need to manage your site:
 - **Site identity** — set your name and tagline shown on the homepage
 - **Logos** — upload a small icon logo and a larger logomark; both appear in the nav and admin panel
 - **Nav logo size** — slider to adjust logo height (50% to 200%)
-- **Admin password** — change your login password without restarting the server
-- **Secret access word** — optionally hide the login page behind a URL token (`?token=yourword`)
+- **Admin password** — change your login password without restarting the server. Only matters for a live deployment — no password is ever required to use this admin panel from your own machine.
 - **AI provider** — add API keys and switch between Anthropic, OpenAI, and Gemini
 
 ### Remote Server tab
 Only shown when running locally. Full server management without needing a terminal:
 - Save SSH credentials (host, username, port, remote path)
 - Test SSH connection with one click
-- Step-by-step server setup — each step has a "Run on server" button that executes the command and shows output
-- **Content Sync:** push your local database and images to the server, pull from server, compare differences, or download a full backup. When the admin panel opens, it automatically checks the server in the background and pulls any content (images or database) that is missing locally — a brief notification appears in the corner if anything was synced.
-- **Server Commands:** restart the site, view logs, check status (PM2 + disk + uptime), pull code updates (git pull + npm install + restart)
+- Step-by-step server setup — each step has a "Run on server" button that executes the command and shows output, including setting your live admin password and an optional secret admin path (visit that word instead of typing "admin" to reach the login page — otherwise `/admin/login` 404s for outside visitors)
+- **Content Sync:** push your local database and images to the server, pull from server, compare differences, or download a full backup. Every push/pull only transfers files that actually differ and verifies they landed correctly, retrying automatically if not. When the admin panel opens, it checks the server in the background and shows a banner with Push/Pull buttons if anything differs — nothing syncs without you clicking. Compare also flags orphaned files (unused by any project, safe to delete) and broken image references (a project points at a file that's missing).
+- **Server Commands:** restart the site, view logs, check status (PM2 + disk + uptime), pull code updates (git pull + npm install + restart), change the live admin password or secret admin path
 - Copy the SSH command to open a terminal session to your server
-- AI assistant for troubleshooting and setup questions
+- AI assistant for troubleshooting and setup questions — it can also answer questions about the codebase itself, since it reads this project's own docs
 
 ### Activity tab
 - Recent visitor log with IP, path, and timestamp
@@ -141,6 +140,7 @@ Your API key is in `.env` and shown in **Admin → Settings → API key**.
 `node manage.js` — run this on your live server (via SSH) to change settings without restarting:
 
 - Change admin password
+- Change admin secret path (the word typed instead of "admin" to reach the login page)
 - Rotate session secret (signs out all active sessions)
 - Rotate REST API key
 - Change port

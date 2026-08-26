@@ -887,41 +887,6 @@
     });
   });
 
-  // ── Settings: secret access word ──────────────────────────────────────────
-  const accessTokenForm = document.getElementById('access-token-form');
-  if (accessTokenForm) {
-    accessTokenForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const token    = document.getElementById('access-token-input').value.trim();
-      const feedback = document.getElementById('access-token-feedback');
-      const btn      = accessTokenForm.querySelector('button[type="submit"]');
-
-      if (token && token.length < 6) {
-        feedback.textContent = 'Must be at least 6 characters.';
-        feedback.style.color = 'var(--danger, #c0392b)';
-        return;
-      }
-
-      btn.disabled = true;
-      feedback.textContent = 'Saving…';
-      feedback.style.color = 'var(--muted)';
-      try {
-        await apiFetch('/admin/settings/access-token', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ token }),
-        });
-        feedback.textContent = token ? 'Secret word enabled.' : 'Disabled.';
-        feedback.style.color = 'var(--success, #2d8a4e)';
-        setTimeout(() => location.reload(), 1000);
-      } catch (err) {
-        feedback.textContent = err.message;
-        feedback.style.color = 'var(--danger, #c0392b)';
-        btn.disabled = false;
-      }
-    });
-  }
-
   // -- Remote Server tab -------------------------------------------------------
   (function initRemoteServer() {
     if (!document.getElementById('rs-creds-card')) return;
@@ -1090,9 +1055,10 @@
       if (carouselRun) {
         carouselRun.style.display = cmd ? '' : 'none';
         if (cmd) {
-          carouselRun.dataset.cmd           = cmd;
-          carouselRun.dataset.needsDomain   = stepPanels[currentStep].dataset.needsDomain   || 'false';
-          carouselRun.dataset.needsPassword = stepPanels[currentStep].dataset.needsPassword || 'false';
+          carouselRun.dataset.cmd            = cmd;
+          carouselRun.dataset.needsDomain    = stepPanels[currentStep].dataset.needsDomain    || 'false';
+          carouselRun.dataset.needsPassword  = stepPanels[currentStep].dataset.needsPassword  || 'false';
+          carouselRun.dataset.needsAdminPath = stepPanels[currentStep].dataset.needsAdminPath || 'false';
         }
       }
       if (manualDoneNav) manualDoneNav.style.display = isManual ? '' : 'none';
@@ -1113,11 +1079,13 @@
 
     if (carouselRun) {
       carouselRun.addEventListener('click', async () => {
-        const command      = carouselRun.dataset.cmd;
-        const needsDomain  = carouselRun.dataset.needsDomain  === 'true';
-        const needsPassword= carouselRun.dataset.needsPassword === 'true';
-        const domain       = needsDomain   ? (document.getElementById('rs-domain-input')?.value.trim()   || '') : '';
-        const password     = needsPassword ? (document.getElementById('rs-setup-password')?.value         || '') : '';
+        const command        = carouselRun.dataset.cmd;
+        const needsDomain    = carouselRun.dataset.needsDomain    === 'true';
+        const needsPassword  = carouselRun.dataset.needsPassword  === 'true';
+        const needsAdminPath = carouselRun.dataset.needsAdminPath === 'true';
+        const domain         = needsDomain    ? (document.getElementById('rs-domain-input')?.value.trim()    || '') : '';
+        const password       = needsPassword  ? (document.getElementById('rs-setup-password')?.value          || '') : '';
+        const adminPath      = needsAdminPath ? (document.getElementById('rs-setup-adminpath')?.value.trim() || '') : '';
 
         if (needsDomain && !domain) {
           if (stepStatus) { stepStatus.textContent = 'Enter your domain first.'; stepStatus.style.color = 'var(--danger,#c0392b)'; }
@@ -1134,8 +1102,9 @@
 
         const payload = { command };
         if (command === 'git_clone') payload.repoUrl = 'https://github.com/lucas-iezzi/open-folio';
-        if (domain)   payload.domain   = domain;
-        if (password) payload.password = password;
+        if (domain)     payload.domain     = domain;
+        if (password)   payload.password   = password;
+        if (adminPath)  payload.adminPath  = adminPath;
 
         try {
           const r = await apiFetch('/admin/deploy/ssh-run', {
@@ -1208,6 +1177,35 @@
       });
     }
 
+    // ── Manage admin path (change the secret word that gates /admin/login) ──
+    const rsManageAdminPathBtn = document.getElementById('rs-manage-adminpath-btn');
+    if (rsManageAdminPathBtn) {
+      rsManageAdminPathBtn.addEventListener('click', async () => {
+        const input = document.getElementById('rs-manage-adminpath');
+        const val = input ? input.value.trim() : '';
+        if (!val) {
+          showLog(logCmds, false, 'Enter an admin path (or "admin" to reset to the default).');
+          return;
+        }
+        rsManageAdminPathBtn.disabled = true;
+        showLog(logCmds, null, 'Changing admin path…');
+        try {
+          const r = await apiFetch('/admin/deploy/ssh-run', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ command: 'set_admin_path', adminPath: val }),
+          });
+          const ok = r.ok !== false;
+          showLog(logCmds, ok, ok ? `Admin path changed to "${val}" and site restarted.` : 'Failed to change admin path.', r.output || r.stdout || r.stderr || '');
+          if (ok && input) input.value = '';
+        } catch (err) {
+          showLog(logCmds, false, err.message);
+        } finally {
+          rsManageAdminPathBtn.disabled = false;
+        }
+      });
+    }
+
     // ── Push / Pull ──
     const rsProgress = document.getElementById('rs-sync-progress');
 
@@ -1252,30 +1250,28 @@
         try {
           await streamNdjson('/admin/deploy/sync-item', { itemId: item.id, direction }, (ev) => {
             let line = null;
-            if (ev.stage === 'transfer') {
-              attempts = ev.attempt;
-              line = attempts > 1
-                ? `${icon} ${item.label} — retrying transfer (attempt ${attempts}/${ev.maxAttempts})…`
-                : `${icon} ${item.label} — transferring…`;
-            } else if (ev.stage === 'transfer-failed') {
-              line = `⚠ ${item.label} — transfer error: ${ev.detail?.message || 'unknown error'}`;
+            if (ev.stage === 'checking') {
+              line = `🔍 ${item.label} — checking what's changed…`;
+            } else if (ev.stage === 'diff-found') {
+              line = `${icon} ${item.label} — ${ev.count} of ${ev.total} file${ev.total === 1 ? '' : 's'} differ`;
+            } else if (ev.stage === 'transfer' && ev.mode === 'file') {
+              line = `${icon} ${item.label} — file ${ev.index}/${ev.count}: ${ev.file}`;
+            } else if (ev.stage === 'transfer') {
+              line = `${icon} ${item.label} — transferring…`;
+            } else if (ev.stage === 'file-failed') {
+              line = `⚠ ${item.label} — ${ev.file} failed: ${ev.error}`;
             } else if (ev.stage === 'verify') {
-              line = `🔍 ${item.label} — verifying on server…`;
-            } else if (ev.stage === 'verify-done' && ev.ok) {
-              const n = ev.detail?.totalChecked ?? 0;
-              line = `✓ ${item.label} — verified (${n} file${n === 1 ? '' : 's'} match)`;
-            } else if (ev.stage === 'verify-done' && !ev.ok) {
-              const n = ev.detail?.missing ? ev.detail.missing.length : null;
-              line = n !== null
-                ? `⚠ ${item.label} — ${n} file${n === 1 ? '' : 's'} don't match yet`
-                : `⚠ ${item.label} — size mismatch after transfer`;
+              line = `🔍 ${item.label} — verifying…`;
             } else if (ev.stage === 'retrying') {
-              line = `↻ ${item.label} — will retry (${ev.nextAttempt}/${ev.maxAttempts})…`;
+              attempts = ev.nextAttempt;
+              line = `↻ ${item.label} — retrying ${ev.label} (${ev.nextAttempt}/${ev.maxAttempts})…`;
             } else if (ev.done) {
               itemOk = ev.ok;
-              if (!ev.ok) {
+              if (ev.detail?.skipped) {
+                line = `✓ ${item.label} — already in sync, nothing to transfer`;
+              } else if (!ev.ok) {
                 const missing = ev.detail?.missing;
-                itemNotes = missing && missing.length ? missing : [ev.detail?.message || 'Verification failed.'];
+                itemNotes = missing && missing.length ? missing : [ev.detail?.reason || ev.detail?.message || 'Sync failed.'];
               }
             }
             if (line) { setSyncProgress(line); render(line); }
@@ -1330,6 +1326,16 @@
     // ── Compare ──
     const rsCompareResult = document.getElementById('rs-compare-result');
 
+    function timeAgo(ts) {
+      const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (s < 60) return 'just now';
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ago`;
+      return `${Math.floor(h / 24)}d ago`;
+    }
+
     async function runCompare() {
       if (!rsCompareResult) return;
       rsCompareResult.innerHTML = '<p class="rs-diff-clean" style="color:var(--muted)">Comparing…</p>';
@@ -1339,10 +1345,13 @@
           rsCompareResult.innerHTML = `<p class="rs-diff-clean" style="color:#c0392b">&#x2717; ${escHtml(r.error || 'Compare failed')}</p>`;
           return;
         }
+
+        let html = '';
+
         if (!r.items || r.items.length === 0) {
-          rsCompareResult.innerHTML = '<p class="rs-diff-clean">&#x2713; Everything is in sync.</p>';
+          html += '<p class="rs-diff-clean">&#x2713; Everything is in sync.</p>';
         } else {
-          let html = `<p class="rs-diff-header">${r.items.length} item${r.items.length === 1 ? '' : 's'} out of sync:</p>`;
+          html += `<p class="rs-diff-header">${r.items.length} item${r.items.length === 1 ? '' : 's'} out of sync:</p>`;
           for (const item of r.items) {
             const dir = item.direction || 'both';
             let actions = '';
@@ -1362,42 +1371,128 @@
               <div class="rs-diff-actions">${actions}</div>
             </div>`;
           }
-          rsCompareResult.innerHTML = html;
-          rsCompareResult.querySelectorAll('.rs-diff-push, .rs-diff-pull').forEach(b => {
-            b.addEventListener('click', async () => {
-              const itemId    = b.dataset.itemId;
-              const direction = b.classList.contains('rs-diff-push') ? 'push' : 'pull';
-              const verb      = direction === 'push' ? 'Pushing' : 'Pulling';
-              b.disabled = true;
-              let finalOk = false;
-              let finalDetail = null;
-              try {
-                await streamNdjson('/admin/deploy/sync-item', { itemId, direction }, (ev) => {
-                  if (ev.stage === 'transfer') {
-                    b.textContent = ev.attempt > 1 ? `${verb}… (attempt ${ev.attempt}/${ev.maxAttempts})` : `${verb}…`;
-                  } else if (ev.stage === 'verify') {
-                    b.textContent = 'Verifying…';
-                  } else if (ev.stage === 'retrying') {
-                    b.textContent = `Retrying (${ev.nextAttempt}/${ev.maxAttempts})…`;
-                  } else if (ev.done) {
-                    finalOk = ev.ok;
-                    finalDetail = ev.detail;
-                  }
-                });
-              } catch (err) {
-                finalDetail = { message: err.message };
-              }
-              if (finalOk) {
+        }
+
+        // ── Broken references — a project/logo points at a file that isn't actually
+        // there on that side. This is what "images disappearing" looks like; sync alone
+        // can't fix it since the file that would need syncing doesn't exist anywhere. ──
+        if (r.broken && r.broken.length) {
+          html += `<p class="rs-diff-header" style="margin-top:1rem;color:#c0392b">&#x26A0; ${r.broken.length} broken image reference${r.broken.length === 1 ? '' : 's'}:</p>`;
+          for (const b of r.broken) {
+            html += `<div class="rs-diff-item">
+              <div class="rs-diff-item-info">
+                <div class="rs-diff-item-label">${escHtml(b.path)}</div>
+                <div class="rs-diff-item-hint">Referenced by a project on <strong>${b.side}</strong>, but the file is missing there — re-upload it or remove it from the project.</div>
+              </div>
+            </div>`;
+          }
+        }
+
+        // ── Orphaned files — exist on one side only, and that side's own content
+        // doesn't reference them. Safe to delete; nothing else is pointing at them. ──
+        if (r.orphans && r.orphans.length) {
+          html += `<p class="rs-diff-header" style="margin-top:1rem">${r.orphans.length} orphaned file${r.orphans.length === 1 ? '' : 's'} (not used on any page):</p>`;
+          for (const o of r.orphans) {
+            html += `<div class="rs-diff-item">
+              <div class="rs-diff-item-info">
+                <div class="rs-diff-item-label">${escHtml(o.path)}</div>
+                <div class="rs-diff-item-hint">Only on <strong>${o.side}</strong>, unused</div>
+              </div>
+              <div class="rs-diff-actions">
+                <button class="btn btn-secondary btn-sm rs-orphan-delete" data-side="${escHtml(o.side)}" data-path="${escHtml(o.path)}">&#x1F5D1; Delete from ${o.side}</button>
+              </div>
+            </div>`;
+          }
+        }
+
+        // ── Recent content changes — best-effort audit trail from content_log ──
+        const logEntries = [
+          ...(r.recentLog?.local  || []).map(e => ({ ...e, side: 'local'  })),
+          ...(r.recentLog?.remote || []).map(e => ({ ...e, side: 'remote' })),
+        ].sort((a, z) => z.ts - a.ts).slice(0, 20);
+        if (logEntries.length) {
+          html += `<details class="rs-inner-card" style="margin-top:1rem">
+            <summary class="rs-inner-summary">Recent content changes</summary>
+            <div class="rs-inner-body">`;
+          for (const e of logEntries) {
+            const icon = e.action === 'added' ? '&#x2795;' : '&#x2796;';
+            html += `<div class="rs-diff-item-hint" style="padding:.15rem 0">${icon} <strong>${escHtml(e.side)}</strong> — ${e.action} ${escHtml(e.path)} <span style="opacity:.6">(${timeAgo(e.ts)})</span></div>`;
+          }
+          html += `</div></details>`;
+        }
+
+        rsCompareResult.innerHTML = html;
+
+        rsCompareResult.querySelectorAll('.rs-diff-push, .rs-diff-pull').forEach(b => {
+          b.addEventListener('click', async () => {
+            const itemId    = b.dataset.itemId;
+            const direction = b.classList.contains('rs-diff-push') ? 'push' : 'pull';
+            const verb      = direction === 'push' ? 'Pushing' : 'Pulling';
+            b.disabled = true;
+            let finalOk = false;
+            let finalDetail = null;
+            try {
+              await streamNdjson('/admin/deploy/sync-item', { itemId, direction }, (ev) => {
+                if (ev.stage === 'checking') {
+                  b.textContent = 'Checking…';
+                } else if (ev.stage === 'diff-found') {
+                  b.textContent = `${ev.count}/${ev.total} differ…`;
+                } else if (ev.stage === 'transfer' && ev.mode === 'file') {
+                  b.textContent = `${verb} ${ev.index}/${ev.count}…`;
+                } else if (ev.stage === 'transfer') {
+                  b.textContent = `${verb}…`;
+                } else if (ev.stage === 'verify') {
+                  b.textContent = 'Verifying…';
+                } else if (ev.stage === 'retrying') {
+                  b.textContent = `Retrying (${ev.nextAttempt}/${ev.maxAttempts})…`;
+                } else if (ev.done) {
+                  finalOk = ev.ok;
+                  finalDetail = ev.detail;
+                }
+              });
+            } catch (err) {
+              finalDetail = { message: err.message };
+            }
+            if (finalOk) {
+              b.closest('.rs-diff-item').style.opacity = '0.45';
+              b.innerHTML = (finalDetail && finalDetail.skipped)
+                ? '&#x2713; Already in sync'
+                : (direction === 'push' ? '&#x2191; Pushed &amp; verified' : '&#x2193; Pulled &amp; verified');
+            } else {
+              const missingCount = finalDetail && finalDetail.missing ? finalDetail.missing.length : 0;
+              b.textContent = missingCount ? `✗ ${missingCount} file(s) still missing` : '✗ Failed — see server';
+              b.disabled = false;
+            }
+          });
+        });
+
+        rsCompareResult.querySelectorAll('.rs-orphan-delete').forEach(b => {
+          b.addEventListener('click', async () => {
+            const side = b.dataset.side;
+            const p    = b.dataset.path;
+            if (!confirm(`Delete "${p}" from ${side}? This file isn't used on any page, but deleting it can't be undone.`)) return;
+            b.disabled = true;
+            b.textContent = 'Deleting…';
+            try {
+              const r2 = await apiFetch('/admin/deploy/cleanup-orphans', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ side, paths: [p] }),
+              });
+              const result = r2.results && r2.results[0];
+              if (result && result.ok) {
                 b.closest('.rs-diff-item').style.opacity = '0.45';
-                b.innerHTML = direction === 'push' ? '&#x2191; Pushed &amp; verified' : '&#x2193; Pulled &amp; verified';
+                b.innerHTML = '&#x2713; Deleted';
               } else {
-                const missingCount = finalDetail && finalDetail.missing ? finalDetail.missing.length : 0;
-                b.textContent = missingCount ? `✗ ${missingCount} file(s) still missing` : '✗ Failed — see server';
+                b.textContent = `✗ ${(result && result.reason) || 'Failed'}`;
                 b.disabled = false;
               }
-            });
+            } catch (err) {
+              b.textContent = `✗ ${err.message}`;
+              b.disabled = false;
+            }
           });
-        }
+        });
       } catch (err) {
         if (rsCompareResult) rsCompareResult.innerHTML = `<p class="rs-diff-clean" style="color:#c0392b">&#x2717; ${escHtml(err.message)}</p>`;
       }

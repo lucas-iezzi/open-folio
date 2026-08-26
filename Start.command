@@ -40,4 +40,7 @@ if [ ! -d "node_modules/express" ]; then
   fi
 fi
 
-exec node scripts/launcher-server.js
+node scripts/start.js
+if [ $? -ne 0 ]; then
+  read -rp "  Press Enter to exit..."
+fi
