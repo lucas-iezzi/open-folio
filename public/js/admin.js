@@ -1546,10 +1546,13 @@
       }
       setSyncProgressBar(100);
 
-      // Restart the remote server if we pushed anything, so it picks up the new database.
+      // Only a whole-file db push needs a restart — the server's own open connection to
+      // that file gets orphaned when scp replaces it. Per-project/settings rows and image
+      // files are written in place (or served straight off disk), so they take effect
+      // immediately without one.
       let restartOk = null;
       let restartOut = '';
-      if (plan.some((p) => p.direction === 'push')) {
+      if (plan.some((p) => p.direction === 'push' && p.id === 'db')) {
         setSyncProgress('↺ Restarting server…');
         render('↺ Restarting server…');
         try {

@@ -15,6 +15,7 @@ const { spawnSync, spawn } = require('child_process');
 const Database  = require('better-sqlite3');
 const SqliteStore = require('better-sqlite3-session-store')(session);
 const { buildManifest, normalizeRef } = require('./lib/content-manifest');
+const { readProjectRow, upsertProjectRow, readAllSettings, writeAllSettings } = require('./lib/project-sync');
 
 // ── Startup validation ────────────────────────────────────────────────────────
 // No admin password is required to run locally — see isLocalAccess()/requireAuth()
@@ -1308,7 +1309,7 @@ REMOTE SERVER TAB — what the user sees and can do:
    Step 12: Point DNS (manual — A record at registrar pointing to server IP)
    Step 13: Push your content to the server — pushes db + all images so the fresh server starts out with real content. Unlike steps 2-11 (opaque SSH commands, so their progress bar is a simulated estimate), this one reuses the same streaming sync-item machinery as Content Sync, so its progress bar shows genuine per-file completion.
    Note: Steps 1 and 12 are manual (no SSH command) — their "Mark step done" button only turns the step bubble green; it does not auto-advance the carousel, so the user reviews the instructions at their own pace. Completed steps (the green bubbles) persist in the browser's localStorage, surviving a page reload or restarting the local server — a "✓ Complete" badge shows next to the card title once all 13 are done, and the card defaults collapsed.
-4. Content Sync: one "⇄ Sync content" button inside the Compare panel — runs Compare, then pushes/pulls exactly the items that differ (each with its own progress bar and log lines), asking once per item (a confirm() dialog) when that item changed on *both* sides and there's no way to know which should win. Compare itself (`/admin/deploy/compare`) is read-only and re-runs whenever the panel is opened or "Refresh" is clicked; it also flags "broken" images (a project references a file that isn't actually there — the real signature of images going missing) and "orphaned" files (unused by any project, safe to delete via a reviewable per-file button), using a content manifest (lib/content-manifest.js, scripts/manifest.js) that requires the remote to have pulled that script via git — content sync (push/pull) never deploys code, only DB + images, so a server that hasn't run "Pull code updates" recently won't have orphan/broken detection yet even though basic sync still works. Individual items can still be pushed/pulled one at a time from the expanded compare list. On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with the same single Sync button (with its own progress bar) — nothing syncs automatically without a click. Backup (downloads everything) is a separate action. Every transfer first diffs local vs remote and sends only files that actually differ (skips entirely if already in sync); small diffs go file-by-file with independent per-file retry, large/fresh transfers use one recursive scp; either way the result is re-verified against the actual remote/local file listing and retried up to 3 times before giving up, instead of trusting scp's exit code alone.
+4. Content Sync: one "⇄ Sync content" button inside the Compare panel — runs Compare, then pushes/pulls exactly the items that differ (each with its own progress bar and log lines), asking once per item (a confirm() dialog) when that item changed on *both* sides and there's no way to know which should win. Compare itself (`/admin/deploy/compare`) is read-only and re-runs whenever the panel is opened or "Refresh" is clicked; it reports one item per *project* (by content hash, not the whole db file — reordering the grid alone doesn't count as a change) plus one for the settings table, so pushing/pulling a single changed project doesn't touch the rest or need a server restart. It also flags "broken" images (a project references a file that isn't actually there — the real signature of images going missing) and "orphaned" files (unused by any project, safe to delete via a reviewable per-file button), using a content manifest (lib/content-manifest.js, scripts/manifest.js) that requires the remote to have pulled that script via git — falls back to one coarse whole-file-size db check on older deploys that haven't. Individual items (a project, the settings, an image group) can still be pushed/pulled one at a time from the expanded compare list. On admin panel open, a background Compare check runs (throttled to once per 2 min per tab); if anything differs it shows a dismissible banner with the same single Sync button (with its own progress bar) — nothing syncs automatically without a click. Backup (downloads everything) is a separate action. Every transfer first diffs local vs remote and sends only files that actually differ (skips entirely if already in sync); small diffs go file-by-file with independent per-file retry, large/fresh transfers use one recursive scp; either way the result is re-verified against the actual remote/local file listing and retried up to 3 times before giving up, instead of trusting scp's exit code alone.
 4b. Clear Content (in the Content Sync card, styled as a danger zone): "Clear all content from server" / "...from local site" — deletes all projects + project images on just that one side (logos and site settings are left alone), so it can be pushed/pulled fresh. Backs up automatically first (downloads a snapshot for server, copies to data/backups/ for local) and aborts without deleting anything if that backup fails. Requires typing DELETE to confirm, on top of a regular confirm() dialog. Clears the projects table via the already-open db handle (a DELETE statement) rather than deleting the .db file — deleting a file that's open by the very process serving the request doesn't work reliably, especially on Windows.
 5. Server Commands (one-click buttons that run over SSH):
    - Restart site: pm2 restart open-folio
@@ -1811,6 +1812,19 @@ function sshExec(cfg, command, timeoutMs = 60000) {
   return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
 }
 
+// Same as sshExec, but pipes data to the remote command's stdin — used for per-project
+// database sync, where the project row (JSON, potentially large — long section text,
+// many images) is piped rather than passed as a command-line argument, avoiding shell
+// quoting/length issues entirely.
+function sshExecWithStdin(cfg, command, stdinData, timeoutMs = 60000) {
+  const { host, user, sshPort = 22 } = cfg;
+  const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
+  if (Number(sshPort) !== 22) args.push('-p', String(sshPort));
+  args.push(`${user}@${host}`, command);
+  const r = spawnSync('ssh', args, { input: stdinData, timeout: timeoutMs, encoding: 'utf8', cwd: __dirname });
+  return { ok: r.status === 0 && !r.error, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), err: r.error ? r.error.message : null };
+}
+
 function scpRun(src, dest, sshPort = 22, isDir = false, timeoutMs = 120000) {
   const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes'];
   if (isDir) args.push('-r');
@@ -2285,19 +2299,52 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
   const items = [];
 
   // ── Database ────────────────────────────────────────────────────────────────
+  // If the whole file is missing on one side, that's still a whole-file push/pull —
+  // there's nothing to diff per-project against yet. Otherwise, compare per-project
+  // (and the settings table) using the content manifest, which needs the remote to
+  // have pulled scripts/manifest.js via git; degrades to the old whole-file-size
+  // check for deploys that haven't.
   const localDbPath   = path.join(__dirname, 'data', 'portfolio.db');
   const localDbExists = fs.existsSync(localDbPath);
   const remoteDbRaw   = (dbResult.stdout || '').trim();
+  const remoteDbExists = remoteDbRaw !== '__missing__';
 
-  if (remoteDbRaw === '__missing__' && localDbExists) {
-    items.push({ id: 'db', label: 'Portfolio database', hint: 'Not on server yet', direction: 'push' });
-  } else if (remoteDbRaw !== '__missing__' && !localDbExists) {
+  let localManifest = null;
+  let remoteManifest = null;
+  try { localManifest = buildManifest({ dbPath: DB_PATH, imagesDir: path.join(__dirname, 'public', 'images') }); } catch { /* local db unreadable — treated as missing below */ }
+  if (manifestResult.ok && manifestResult.stdout) {
+    try { remoteManifest = JSON.parse(manifestResult.stdout); } catch { /* remote script missing/old — falls back below */ }
+  }
+
+  if (remoteDbExists && !localDbExists) {
     items.push({ id: 'db', label: 'Portfolio database', hint: 'Not on local machine', direction: 'pull' });
-  } else if (localDbExists && remoteDbRaw !== '__missing__') {
-    const localSize  = fs.statSync(localDbPath).size;
-    const remoteSize = parseInt(remoteDbRaw, 10) || 0;
-    if (localSize !== remoteSize) {
-      items.push({ id: 'db', label: 'Portfolio database', hint: `Sizes differ — Local: ${(localSize/1024).toFixed(1)} KB / Server: ${(remoteSize/1024).toFixed(1)} KB`, direction: 'both' });
+  } else if (!remoteDbExists && localDbExists) {
+    items.push({ id: 'db', label: 'Portfolio database', hint: 'Not on server yet', direction: 'push' });
+  } else if (localDbExists && remoteDbExists) {
+    if (localManifest && remoteManifest) {
+      const localProjects  = localManifest.projects || {};
+      const remoteProjects = remoteManifest.projects || {};
+      const allSlugs = new Set([...Object.keys(localProjects), ...Object.keys(remoteProjects)]);
+      for (const slug of allSlugs) {
+        const l = localProjects[slug];
+        const r = remoteProjects[slug];
+        let direction = null;
+        let hint = '';
+        if (l && !r)      { direction = 'push'; hint = 'Not on server yet'; }
+        else if (r && !l) { direction = 'pull'; hint = 'Not on local machine'; }
+        else if (l.hash !== r.hash) { direction = 'both'; hint = 'Changed on both sides'; }
+        if (direction) items.push({ id: `db-project/${slug}`, label: (l || r).title || slug, hint, direction });
+      }
+      if (localManifest.settingsHash !== remoteManifest.settingsHash) {
+        items.push({ id: 'db-settings', label: 'Site settings', hint: 'Name, tagline, logos, or nav size differ', direction: 'both' });
+      }
+    } else {
+      // Fallback for a remote that hasn't pulled scripts/manifest.js yet.
+      const localSize  = fs.statSync(localDbPath).size;
+      const remoteSize = parseInt(remoteDbRaw, 10) || 0;
+      if (localSize !== remoteSize) {
+        items.push({ id: 'db', label: 'Portfolio database', hint: `Sizes differ — Local: ${(localSize/1024).toFixed(1)} KB / Server: ${(remoteSize/1024).toFixed(1)} KB`, direction: 'both' });
+      }
     }
   }
 
@@ -2359,32 +2406,31 @@ app.post('/admin/deploy/compare', requireAuth, requireCsrf, requireLocal, (req, 
 
   // ── Orphans (side-only files not referenced by that side's own content — safe to
   // delete) and broken references (referenced by a project but the file is missing —
-  // this is what "images disappearing" looks like). Best-effort: needs scripts/manifest.js
-  // on the remote (deployed via git pull), so it degrades gracefully on older deploys. ──
+  // this is what "images disappearing" looks like). Reuses the manifests already
+  // computed above for the per-project db comparison. Best-effort: needs
+  // scripts/manifest.js on the remote (deployed via git pull), so it degrades
+  // gracefully on older deploys. ──
   const orphans = [];
   const broken  = [];
   const recentLog = { local: [], remote: [] };
   try {
-    const localManifest = buildManifest({ dbPath: DB_PATH, imagesDir: localImgBase });
-    recentLog.local = localManifest.recentLog;
-    for (const relPath of localManifest.missing) broken.push({ side: 'local', path: relPath });
+    if (localManifest) {
+      recentLog.local = localManifest.recentLog;
+      for (const relPath of localManifest.missing) broken.push({ side: 'local', path: relPath });
 
-    const localOrphanSet = new Set(localManifest.orphaned);
-    for (const [relPath] of localFiles) {
-      if (!remoteFiles.has(relPath) && localOrphanSet.has(relPath)) orphans.push({ side: 'local', path: relPath });
+      const localOrphanSet = new Set(localManifest.orphaned);
+      for (const [relPath] of localFiles) {
+        if (!remoteFiles.has(relPath) && localOrphanSet.has(relPath)) orphans.push({ side: 'local', path: relPath });
+      }
     }
 
-    if (manifestResult.ok && manifestResult.stdout) {
-      let remoteManifest = null;
-      try { remoteManifest = JSON.parse(manifestResult.stdout); } catch { /* remote script missing/old — skip */ }
-      if (remoteManifest) {
-        recentLog.remote = remoteManifest.recentLog || [];
-        for (const relPath of (remoteManifest.missing || [])) broken.push({ side: 'remote', path: relPath });
+    if (remoteManifest) {
+      recentLog.remote = remoteManifest.recentLog || [];
+      for (const relPath of (remoteManifest.missing || [])) broken.push({ side: 'remote', path: relPath });
 
-        const remoteOrphanSet = new Set(remoteManifest.orphaned || []);
-        for (const [relPath] of remoteFiles) {
-          if (!localFiles.has(relPath) && remoteOrphanSet.has(relPath)) orphans.push({ side: 'remote', path: relPath });
-        }
+      const remoteOrphanSet = new Set(remoteManifest.orphaned || []);
+      for (const [relPath] of remoteFiles) {
+        if (!localFiles.has(relPath) && remoteOrphanSet.has(relPath)) orphans.push({ side: 'remote', path: relPath });
       }
     }
   } catch { /* manifest computation is a bonus, never break Compare itself */ }
@@ -2458,7 +2504,9 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
   const { itemId, direction } = req.body;
   if (direction !== 'push' && direction !== 'pull') return res.status(400).json({ error: 'Invalid direction.' });
   if (!itemId || typeof itemId !== 'string') return res.status(400).json({ error: 'itemId required.' });
-  if (!/^(db|images\/logos|images\/projects(\/[a-z0-9][a-z0-9\-]*)?)$/.test(itemId)) return res.status(400).json({ error: 'Invalid itemId.' });
+  if (!/^(db|db-settings|db-project\/[a-z0-9][a-z0-9\-]*|images\/logos|images\/projects(\/[a-z0-9][a-z0-9\-]*)?)$/.test(itemId)) {
+    return res.status(400).json({ error: 'Invalid itemId.' });
+  }
 
   const srv = readServerConfig().server;
   if (!srv || !srv.host) return res.status(400).json({ error: 'No server configured.' });
@@ -2466,12 +2514,61 @@ app.post('/admin/deploy/sync-item', requireAuth, requireCsrf, requireLocal, asyn
   const remote = `${srv.user}@${srv.host}`;
   const erp    = xrp(remotePath);
   const isDb   = itemId === 'db';
-  const rel    = isDb ? null : itemId.replace(/^images\//, '');
+  const rel    = (isDb || itemId === 'db-settings' || itemId.startsWith('db-project/')) ? null : itemId.replace(/^images\//, '');
 
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
   res.flushHeaders();
   const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch {} };
+
+  // ── Site settings (one row per key) — no per-key granularity, just push/pull the
+  // whole table. Ambiguous by nature (Compare always reports 'both' for this one,
+  // since there's no ID-based "only on one side" case), so whichever direction the
+  // user picked wins outright. ──
+  if (itemId === 'db-settings') {
+    send({ stage: 'checking' });
+    if (direction === 'push') {
+      send({ stage: 'transfer' });
+      const xfer = sshExecWithStdin(srv, `cd "${erp}" && node scripts/sync-db-row.js --write-settings`, JSON.stringify(readAllSettings(db)), 20000);
+      send({ done: true, ok: xfer.ok, detail: xfer.ok ? {} : { reason: xfer.stderr || xfer.err || 'Failed to write settings on the server.' } });
+    } else {
+      const r = sshExec(srv, `cd "${erp}" && node scripts/sync-db-row.js --read-settings`, 20000);
+      if (!r.ok) { send({ done: true, ok: false, detail: { reason: r.stderr || r.err || 'Failed to read settings from the server.' } }); return res.end(); }
+      try {
+        writeAllSettings(db, JSON.parse(r.stdout));
+        send({ done: true, ok: true, detail: {} });
+      } catch (e) {
+        send({ done: true, ok: false, detail: { reason: e.message } });
+      }
+    }
+    return res.end();
+  }
+
+  // ── Single project row — pushed/pulled by slug, preserving whichever side's
+  // sort_order already exists for it (or appending, if the slug is new there), so
+  // syncing one project never reshuffles the rest of the grid. ──
+  if (itemId.startsWith('db-project/')) {
+    const slug = itemId.slice('db-project/'.length);
+    send({ stage: 'checking' });
+    if (direction === 'push') {
+      const row = readProjectRow(db, slug);
+      if (!row) { send({ done: true, ok: false, detail: { reason: `"${slug}" not found locally.` } }); return res.end(); }
+      send({ stage: 'transfer' });
+      const xfer = sshExecWithStdin(srv, `cd "${erp}" && node scripts/sync-db-row.js --write-project`, JSON.stringify(row), 20000);
+      send({ done: true, ok: xfer.ok, detail: xfer.ok ? {} : { reason: xfer.stderr || xfer.err || `Failed to write "${slug}" on the server.` } });
+    } else {
+      send({ stage: 'transfer' });
+      const r = sshExec(srv, `cd "${erp}" && node scripts/sync-db-row.js --read-project '${shEsc(slug)}'`, 20000);
+      if (!r.ok) { send({ done: true, ok: false, detail: { reason: r.stderr || r.err || `"${slug}" not found on the server.` } }); return res.end(); }
+      try {
+        upsertProjectRow(db, JSON.parse(r.stdout));
+        send({ done: true, ok: true, detail: {} });
+      } catch (e) {
+        send({ done: true, ok: false, detail: { reason: e.message } });
+      }
+    }
+    return res.end();
+  }
 
   // Retries a single transfer step up to SYNC_MAX_ATTEMPTS times. Used both for the
   // whole-file DB transfer and for individual image files, so one bad file only costs
