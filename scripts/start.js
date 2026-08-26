@@ -7,10 +7,10 @@
 // own port): now there's just one process, one window, and no setup step, since
 // server.js generates its own .env on first run.
 
-const path     = require('path');
-const fs       = require('fs');
-const net      = require('net');
-const { spawn } = require('child_process');
+const path       = require('path');
+const fs         = require('fs');
+const net        = require('net');
+const { spawn, spawnSync } = require('child_process');
 
 const ROOT        = path.join(__dirname, '..');
 const SERVER_PATH = path.join(ROOT, 'server.js');
@@ -50,6 +50,49 @@ function isPortFree(port) {
   });
 }
 
+// Force-frees a port held by a stale process (e.g. a previous run whose window was
+// closed rather than stopped with Ctrl+C, which can leave it running on Windows).
+// Never targets our own PID, though that shouldn't be possible since this process
+// never binds the port itself.
+function killPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const r = spawnSync('cmd', ['/c', `netstat -ano | findstr :${port} | findstr LISTENING`], { encoding: 'utf8' });
+      let killed = false;
+      for (const line of (r.stdout || '').trim().split('\n').filter(Boolean)) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && /^\d+$/.test(pid) && pid !== '0' && parseInt(pid, 10) !== process.pid) {
+          spawnSync('taskkill', ['/PID', pid, '/F'], { stdio: 'ignore' });
+          killed = true;
+        }
+      }
+      return killed;
+    }
+    const r = spawnSync('sh', ['-c', `lsof -ti:${port}`], { encoding: 'utf8' });
+    const pids = (r.stdout || '').trim().split('\n').filter((p) => /^\d+$/.test(p.trim()));
+    for (const pid of pids) if (parseInt(pid, 10) !== process.pid) spawnSync('kill', ['-9', pid.trim()], { stdio: 'ignore' });
+    return pids.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Confirms the port is actually free before we try to bind it, reclaiming it from a
+// stale process if needed, instead of spawning a child that's doomed to crash with
+// EADDRINUSE — which used to show up as a confusing "server stopped unexpectedly"
+// while the *old*, still-running process kept the site reachable the whole time.
+async function ensurePortFree(port) {
+  if (await isPortFree(port)) return true;
+  status('!', C.yellow, `Port ${port} is already in use — probably a previous session that didn't close cleanly. Freeing it…`);
+  killPort(port);
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (await isPortFree(port)) return true;
+  }
+  return false;
+}
+
 async function waitUntilUp(port, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -82,35 +125,43 @@ function banner() {
 function printChecklist() {
   const nodeOk = parseInt(process.versions.node.split('.')[0], 10) >= 18;
   const depsOk = fs.existsSync(path.join(ROOT, 'node_modules', 'express', 'package.json'));
-  const envOk  = fs.existsSync(ENV_PATH);
 
   status(nodeOk ? '✓' : '✗', nodeOk ? C.green : C.red, 'Node.js v' + process.versions.node + (nodeOk ? '' : ' — requires v18+'));
   status(depsOk ? '✓' : '✗', depsOk ? C.green : C.red, depsOk ? 'Dependencies installed' : 'Dependencies missing — run: npm install');
-  status(envOk  ? '✓' : '·', envOk  ? C.green : C.dim,  envOk  ? 'Configuration found'    : 'No configuration yet — will be created automatically');
   console.log();
 
   return nodeOk && depsOk;
 }
 
-let child          = null;
-let stopRequested  = false;
-let openedBrowser  = false;
+let child         = null;
+let stopRequested = false;
+let openedBrowser = false;
 
-function runServer() {
+async function runServer() {
   const env  = parseEnv();
   const port = parseInt(env.PORT, 10) || 3000;
 
-  status('●', C.yellow, 'Starting…');
-  child = spawn(process.execPath, [SERVER_PATH], { cwd: ROOT, stdio: 'inherit' });
+  const portFree = await ensurePortFree(port);
+  if (!portFree) {
+    status('✗', C.red, `Port ${port} is still in use by something else and couldn't be freed automatically.`);
+    console.log(C.dim + `  Close whatever's using port ${port}, or change PORT in .env, then try again.` + C.reset);
+    return { code: null, portConflict: true };
+  }
 
-  // If another instance is already running on this port, the port shows "occupied"
-  // almost instantly (it's already bound) — much faster than spawning a whole new
-  // Node process for *this* child, which then fails to bind and exits a bit later.
-  // Without the grace period below, "Running" can print before that crash message
-  // even shows up, which is a confusing thing to see.
+  console.log(C.dim + '  Starting server…' + C.reset);
+  child = spawn(process.execPath, [SERVER_PATH], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: Object.assign({}, process.env, { OPENFOLIO_QUIET_STARTUP: '1' }),
+  });
+
   let exited = false;
   child.once('exit', () => { exited = true; });
 
+  // A grace period before trusting "the port is up" as *this* child succeeding — if
+  // something else grabbed the port between our check above and now (rare, but
+  // possible), that child fails fast, and we'd rather show its crash than a false
+  // "Running" a moment before it.
   (async () => {
     await new Promise((r) => setTimeout(r, 400));
     if (stopRequested || exited) return;
@@ -120,17 +171,17 @@ function runServer() {
       status('!', C.yellow, 'Still starting — check the output above for errors.');
       return;
     }
-    status('●', C.green, `Running at ${C.cyan}http://localhost:${port}${C.reset}`);
-    console.log('    Admin panel: ' + C.cyan + `http://localhost:${port}/admin/dashboard` + C.reset
-      + C.dim + '  (no password needed on this machine)' + C.reset);
+    status('●', C.green, `Running — ${C.cyan}http://localhost:${port}${C.reset}`);
+    console.log('    Admin: ' + C.cyan + `http://localhost:${port}/admin/dashboard` + C.reset
+      + C.dim + ' (no password needed on this machine)' + C.reset);
     console.log();
     console.log(C.dim + '  Press Ctrl+C to stop.' + C.reset);
     console.log();
-    if (!openedBrowser) { openBrowser(`http://localhost:${port}`); openedBrowser = true; }
+    if (!openedBrowser) { openBrowser(`http://localhost:${port}/admin/dashboard`); openedBrowser = true; }
   })();
 
   return new Promise((resolve) => {
-    child.on('exit', (code, signal) => resolve({ code, signal }));
+    child.on('exit', (code) => resolve({ code, portConflict: false }));
   });
 }
 
@@ -169,7 +220,7 @@ async function main() {
   }
 
   for (;;) {
-    const { code } = await runServer();
+    const result = await runServer();
 
     if (stopRequested) {
       console.log();
@@ -180,7 +231,9 @@ async function main() {
     }
 
     console.log();
-    status('✗', C.red, `Server stopped unexpectedly (exit code ${code}).`);
+    if (!result.portConflict) {
+      status('✗', C.red, `Server stopped unexpectedly (exit code ${result.code}).`);
+    }
     const choice = await promptRestartOrQuit();
     if (choice === 'quit') {
       console.log(C.dim + '  Goodbye!' + C.reset);

@@ -8,7 +8,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "setup": "node scripts/setup.js",
-    "launch": "node launcher.js"
+    "launch": "node scripts/start.js"
   },
   "engines": {
     "node": ">=18.0.0"

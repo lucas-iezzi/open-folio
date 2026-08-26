@@ -147,7 +147,7 @@ async function runCli(bcrypt) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   if (!fs.existsSync(ENV_PATH)) {
-    console.log('\n  ' + cross('.env not found. Run node launcher.js on this machine first.\n'));
+    console.log('\n  ' + cross('.env not found. Run node scripts/setup.js --password=xxx first.\n'));
     rl.close();
     process.exit(1);
   }

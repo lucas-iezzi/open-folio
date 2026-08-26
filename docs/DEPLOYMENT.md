@@ -11,7 +11,7 @@ This guide covers two scenarios:
 
 ### Requirements
 
-- **Node.js 18+** — the launcher installs it automatically on Windows and Mac if missing
+- **Node.js 18+** — `Start.bat`/`Start.command` install it automatically on Windows and Mac if missing
 - No other dependencies
 
 ### First-time setup
@@ -24,34 +24,28 @@ Or in a terminal:
 ```bash
 git clone https://github.com/lucas-iezzi/open-folio.git
 cd open-folio
-node launcher.js
+npm install
+node scripts/start.js
 ```
 
-The launcher will:
-1. Check that Node.js and dependencies are installed
-2. Run setup (generates `.env` with secrets and prompts you to set an admin password)
-3. Start the server
+There's no separate setup step — the first run automatically:
+1. Checks that Node.js and dependencies are installed
+2. Generates `.env` (session secret + API key) if it doesn't exist yet
+3. Starts the server and opens it in your browser
+
+No password is needed at any point for this — local access to the admin panel never requires one. A password only matters once you deploy live (Part 2, below).
 
 ### After first-time setup
 
-Just double-click `Start.bat` / `Start.command`, or run `node launcher.js` → `[1] Start server`.
+Just double-click `Start.bat` / `Start.command` again.
 
 Your site is at:
 - Portfolio: `http://localhost:3000`
-- Admin: `http://localhost:3000/admin/login`
+- Admin: `http://localhost:3000/admin/dashboard` — no login needed on your own machine
 
-### Launcher options
+### The terminal window
 
-```
-[1] Start / Restart server
-[2] Configure AI provider & API key
-[3] Change admin password
-[4] Change port
-[5] Re-run full setup
-[q] Quit
-```
-
-You can leave the launcher running in the background — it keeps the server alive.
+`scripts/start.js` runs in the foreground of that window — it's not a background service with its own menu. It shows a short checklist, then "Running — http://localhost:3000" once the server is confirmed up. **Ctrl+C** stops it cleanly. If it ever exits unexpectedly (e.g. a crash), it shows the exit code and prompts **Press R to restart, or Q to quit**. It also automatically reclaims port 3000 if a previous session didn't shut down cleanly, rather than failing to start.
 
 ---
 

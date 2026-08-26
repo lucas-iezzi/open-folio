@@ -4397,6 +4397,11 @@ app.use((err, req, res, next) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.listen(PORT, () => {
-  console.log(`\n🌐  Portfolio running at http://localhost:${PORT}`);
-  console.log(`🔐  Admin panel:  http://localhost:${PORT}/admin/login\n`);
+  // scripts/start.js prints its own richer status once it's confirmed the server is
+  // actually up, so it sets this to avoid printing two different "here's your URL"
+  // messages back to back.
+  if (!process.env.OPENFOLIO_QUIET_STARTUP) {
+    console.log(`\n🌐  Portfolio running at http://localhost:${PORT}`);
+    console.log(`🔐  Admin panel:  http://localhost:${PORT}/admin/login\n`);
+  }
 });

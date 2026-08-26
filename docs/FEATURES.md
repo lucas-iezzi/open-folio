@@ -123,15 +123,15 @@ Your API key is in `.env` and shown in **Admin → Settings → API key**.
 
 ---
 
-## Launcher CLI
+## Starting the server
 
-`node launcher.js` — the control panel for your local setup:
+`Start.bat` / `Start.command` (or `node scripts/start.js` directly) — no separate app or menu, just a terminal window:
 
-- Start and stop the local server
-- Configure AI provider and API key
-- Change admin password
-- Change server port
-- Re-run first-time setup
+- Checks Node.js and dependencies, generates `.env` automatically on first run (no password needed locally)
+- Shows "Running — http://localhost:3000" once the server is confirmed up, and opens it in your browser
+- Automatically reclaims the port if a previous session didn't shut down cleanly
+- **Ctrl+C** to stop; if it crashes, prompts to restart or quit
+- Change the port or AI provider from the admin panel's Settings tab once it's running
 
 ---
 

@@ -5,10 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Interactive launcher — setup, run server, manage AI keys, deploy tools
-node launcher.js
+# Friendly terminal wrapper — checklist, status, restart-on-crash prompt (what Start.bat/Start.command run)
+node scripts/start.js
 
-# First-time setup only (generates .env)
+# First-time setup only (generates .env) — not required locally, server.js does this itself on first run
 npm run setup
 
 # Development (auto-restarts on file changes)
@@ -188,11 +188,7 @@ There is no separate launcher GUI/app anymore — `Start.bat` and `Start.command
 2. Run `npm install` if `node_modules` is absent
 3. Run `node scripts/start.js`, which stays in the foreground of that same window
 
-`scripts/start.js` prints a short Node/dependencies/config checklist, spawns `server.js` as a child process with inherited stdio (so its own console output — routes, errors — shows through directly), polls the port to announce "Running at http://localhost:PORT" once it's actually up, and opens the browser automatically. Ctrl+C stops it cleanly; an unexpected exit (crash) instead prompts "Press R to restart, or Q to quit" via a single raw-mode keypress. No password/AI-key setup lives here — local access never needs a password (see the Admin auth section above), `server.js` auto-generates `.env` on first run if it's missing, and remote-server/content-sync management is entirely the admin panel's Remote Server tab's job (`/admin/deploy/*` routes). This replaced a previous GUI launcher (`scripts/launcher-server.js`, a second Express server on its own port serving a multi-tab HTML UI) that duplicated a lot of what the admin panel already did.
-
-### launcher.js (separate CLI menu)
-
-A different, older interactive terminal menu — start/stop server, configure AI, change password, change port, re-run setup. Predates both the admin panel's Remote Server tab and the local-access auth bypass described above; its "change password" option still writes `ADMIN_PASSWORD_HASH` locally, which no longer has any effect on local access (only matters if this exact `.env` were ever used for a non-local deployment). Not cleaned up to match — lower priority since `Start.bat`/`Start.command` go through `scripts/start.js`, not this file. Still reads/writes `.launcher-config.json` (`{ server: { host, user, sshPort, remotePath } }`), the same file `server.js` reads for the admin panel's Remote Server tab.
+`scripts/start.js` prints a short Node/dependencies checklist, then before each start (including restarts) confirms the port is actually free — force-killing whatever's holding it first if not (`killPort()`/`ensurePortFree()`), since a previous session's window being closed rather than stopped with Ctrl+C can leave a stale process running on Windows. It spawns `server.js` as a child with inherited stdio (so its own console output — errors, warnings — shows through directly, but its normal startup banner is suppressed via `OPENFOLIO_QUIET_STARTUP=1` since start.js prints its own), polls the port to announce "Running — http://localhost:PORT" once actually confirmed up (with a short grace period so a same-port collision's crash message can't get printed after a false "Running"), and opens the browser automatically. Ctrl+C stops it cleanly; an unexpected exit instead prompts "Press R to restart, or Q to quit" via a single raw-mode keypress. No password/AI-key setup lives here — local access never needs a password (see the Admin auth section above), and remote-server/content-sync management is entirely the admin panel's Remote Server tab's job (`/admin/deploy/*` routes). This replaced a previous GUI launcher (`scripts/launcher-server.js`, a second Express server on its own port serving a multi-tab HTML UI) and a separate CLI menu (`launcher.js`) that duplicated a lot of what the admin panel and this script already do — both removed entirely.
 
 ## Deployment
 

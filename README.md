@@ -21,10 +21,11 @@ Once running, open:
 ```bash
 git clone https://github.com/lucas-iezzi/open-folio.git
 cd open-folio
-node launcher.js
+npm install
+node scripts/start.js
 ```
 
-The launcher generates a session secret on first run and keeps the server running — no setup step required. A password is only needed once you deploy somewhere publicly reachable, which you set up from the admin panel's Remote Server tab.
+`server.js` generates a session secret on first run — no setup step required. A password is only needed once you deploy somewhere publicly reachable, which you set up from the admin panel's Remote Server tab.
 
 ---
 
