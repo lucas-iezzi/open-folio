@@ -128,9 +128,10 @@ Your API key is in `.env` and shown in **Admin → Settings → API key**.
 `Start.bat` / `Start.command` (or `node scripts/start.js` directly) — no separate app or menu, just a terminal window:
 
 - Checks Node.js and dependencies, generates `.env` automatically on first run (no password needed locally)
-- Shows "Running — http://localhost:3000" once the server is confirmed up, and opens it in your browser
+- Shows a clean "Running — http://localhost:3000" screen once the server is confirmed up, and opens the admin panel in your browser
 - Automatically reclaims the port if a previous session didn't shut down cleanly
-- **Ctrl+C** to stop; if it crashes, prompts to restart or quit
+- **R** to restart, **S** to stop, **Q** (or Ctrl+C) to quit — any time, not just after it stops
+- If it crashes unexpectedly, the error stays on screen and it prompts you to restart or quit
 - Change the port or AI provider from the admin panel's Settings tab once it's running
 
 ---

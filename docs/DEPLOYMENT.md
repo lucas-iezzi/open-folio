@@ -45,7 +45,13 @@ Your site is at:
 
 ### The terminal window
 
-`scripts/start.js` runs in the foreground of that window — it's not a background service with its own menu. It shows a short checklist, then "Running — http://localhost:3000" once the server is confirmed up. **Ctrl+C** stops it cleanly. If it ever exits unexpectedly (e.g. a crash), it shows the exit code and prompts **Press R to restart, or Q to quit**. It also automatically reclaims port 3000 if a previous session didn't shut down cleanly, rather than failing to start.
+`scripts/start.js` runs in the foreground of that window — it's not a background service with its own menu. It shows a short checklist, then clears the screen to a clean "Running — http://localhost:3000" view once the server is confirmed up. From there:
+
+- **R** — restart the server
+- **S** — stop it (press R again afterward to start it back up)
+- **Q** (or Ctrl+C) — quit
+
+These work at any time the server is running, not just at a prompt. If it ever exits unexpectedly (a crash), the screen isn't cleared — the exit code and whatever it printed stay visible — and you're prompted to restart or quit. It also automatically reclaims port 3000 if a previous session didn't shut down cleanly, rather than failing to start.
 
 ---
 

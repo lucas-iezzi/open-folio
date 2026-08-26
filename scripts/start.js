@@ -51,9 +51,8 @@ function isPortFree(port) {
 }
 
 // Force-frees a port held by a stale process (e.g. a previous run whose window was
-// closed rather than stopped with Ctrl+C, which can leave it running on Windows).
-// Never targets our own PID, though that shouldn't be possible since this process
-// never binds the port itself.
+// closed rather than stopped cleanly, which can leave it running on Windows). Never
+// targets our own PID, though that shouldn't be possible since we never bind the port.
 function killPort(port) {
   try {
     if (process.platform === 'win32') {
@@ -114,10 +113,25 @@ function status(symbol, color, text) {
   console.log('  ' + color + symbol + C.reset + ' ' + text);
 }
 
+function clearScreen() {
+  // Clears the visible screen and scrollback, not just scrolling past it — keeps the
+  // steady-state view tidy instead of accumulating every past start's checklist/logs.
+  // Skipped outside a real TTY (e.g. piped output) and deliberately NOT called after a
+  // crash, so the error that caused it stays visible instead of being wiped away.
+  if (TTY) process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+}
+
 function banner() {
   console.log();
   console.log(C.bold + '  open-folio' + C.reset);
   console.log(C.gray + '  ' + '─'.repeat(42) + C.reset);
+}
+
+function footer(running) {
+  console.log();
+  console.log(running
+    ? '  ' + C.dim + '[R]' + C.reset + ' restart   ' + C.dim + '[S]' + C.reset + ' stop   ' + C.dim + '[Q]' + C.reset + ' quit'
+    : '  ' + C.dim + '[R]' + C.reset + ' start   ' + C.dim + '[Q]' + C.reset + ' quit');
 }
 
 // Non-blocking informational checklist — Start.bat/Start.command already installed
@@ -133,11 +147,18 @@ function printChecklist() {
   return nodeOk && depsOk;
 }
 
-let child         = null;
-let stopRequested = false;
+// ── State machine ───────────────────────────────────────────────────────────────
+// child       — the current server.js process, or null when stopped
+// intent      — what we're doing with `child` right now, so its 'exit' handler knows
+//               how to react: 'stopping' (user asked to stop — quiet), 'restarting'
+//               (user asked to restart — respawn immediately), 'quitting' (tearing
+//               down the whole wrapper — do nothing further), or null (still running
+//               normally, so an exit here is an actual crash)
+let child        = null;
+let intent       = null;
 let openedBrowser = false;
 
-async function runServer() {
+async function startChild() {
   const env  = parseEnv();
   const port = parseInt(env.PORT, 10) || 3000;
 
@@ -145,70 +166,113 @@ async function runServer() {
   if (!portFree) {
     status('✗', C.red, `Port ${port} is still in use by something else and couldn't be freed automatically.`);
     console.log(C.dim + `  Close whatever's using port ${port}, or change PORT in .env, then try again.` + C.reset);
-    return { code: null, portConflict: true };
+    footer(false);
+    return;
   }
 
   console.log(C.dim + '  Starting server…' + C.reset);
-  child = spawn(process.execPath, [SERVER_PATH], {
+  const myChild = spawn(process.execPath, [SERVER_PATH], {
     cwd: ROOT,
-    stdio: 'inherit',
+    // Child's stdin is disconnected on purpose: server.js never reads it, and this
+    // frees our own stdin to read restart/stop/quit keypresses the whole time the
+    // server is running, instead of only after it exits.
+    stdio: ['ignore', 'inherit', 'inherit'],
     env: Object.assign({}, process.env, { OPENFOLIO_QUIET_STARTUP: '1' }),
   });
+  child = myChild;
 
-  let exited = false;
-  child.once('exit', () => { exited = true; });
+  myChild.on('exit', (code) => {
+    if (child !== myChild) return; // already superseded by a newer child
+    child = null;
 
-  // A grace period before trusting "the port is up" as *this* child succeeding — if
+    if (intent === 'quitting') return; // main()'s quit() owns all further output
+    if (intent === 'stopping') {
+      intent = null;
+      clearScreen();
+      banner();
+      console.log();
+      status('●', C.gray, 'Stopped.');
+      footer(false);
+      return;
+    }
+    if (intent === 'restarting') {
+      intent = null;
+      startChild();
+      return;
+    }
+
+    // Nobody asked for this — an actual crash. Leave the output above (including
+    // whatever server.js printed) on screen rather than clearing it.
+    console.log();
+    status('✗', C.red, `Server stopped unexpectedly (exit code ${code}).`);
+    footer(false);
+  });
+
+  // Grace period before trusting "the port is up" as *this* child succeeding — if
   // something else grabbed the port between our check above and now (rare, but
   // possible), that child fails fast, and we'd rather show its crash than a false
   // "Running" a moment before it.
-  (async () => {
-    await new Promise((r) => setTimeout(r, 400));
-    if (stopRequested || exited) return;
-    const up = await waitUntilUp(port, 15000);
-    if (stopRequested || exited) return;
-    if (!up) {
-      status('!', C.yellow, 'Still starting — check the output above for errors.');
-      return;
-    }
-    status('●', C.green, `Running — ${C.cyan}http://localhost:${port}${C.reset}`);
-    console.log('    Admin: ' + C.cyan + `http://localhost:${port}/admin/dashboard` + C.reset
-      + C.dim + ' (no password needed on this machine)' + C.reset);
-    console.log();
-    console.log(C.dim + '  Press Ctrl+C to stop.' + C.reset);
-    console.log();
-    if (!openedBrowser) { openBrowser(`http://localhost:${port}/admin/dashboard`); openedBrowser = true; }
-  })();
+  await new Promise((r) => setTimeout(r, 400));
+  if (child !== myChild) return;
+  const up = await waitUntilUp(port, 15000);
+  if (child !== myChild) return;
+  if (!up) {
+    status('!', C.yellow, 'Still starting — check the output above for errors.');
+    footer(true);
+    return;
+  }
 
-  return new Promise((resolve) => {
-    child.on('exit', (code) => resolve({ code, portConflict: false }));
-  });
-}
-
-async function promptRestartOrQuit() {
+  clearScreen();
+  banner();
   console.log();
-  console.log('  ' + C.yellow + '!' + C.reset + ' Press ' + C.bold + 'R' + C.reset + ' to restart, or '
-    + C.bold + 'Q' + C.reset + ' to quit.');
+  status('●', C.green, `Running — ${C.cyan}http://localhost:${port}${C.reset}`);
+  console.log('    Admin: ' + C.cyan + `http://localhost:${port}/admin/dashboard` + C.reset
+    + C.dim + ' (no password needed on this machine)' + C.reset);
+  footer(true);
+  if (!openedBrowser) { openBrowser(`http://localhost:${port}/admin/dashboard`); openedBrowser = true; }
+}
 
-  if (!process.stdin.isTTY) return 'quit'; // non-interactive shell — nothing to prompt
+function requestStop() {
+  if (!child) return;
+  intent = 'stopping';
+  console.log();
+  status('●', C.yellow, 'Stopping…');
+  try { child.kill(); } catch {}
+}
 
-  return new Promise((resolve) => {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.once('data', (buf) => {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      resolve(buf.toString().trim().toLowerCase() === 'r' ? 'restart' : 'quit');
-    });
+function requestRestart() {
+  if (!child) { startChild(); return; }
+  intent = 'restarting';
+  console.log();
+  status('●', C.yellow, 'Restarting…');
+  try { child.kill(); } catch {}
+}
+
+function quit() {
+  intent = 'quitting';
+  if (child) { try { child.kill(); } catch {} }
+  console.log();
+  console.log(C.dim + '  Goodbye!' + C.reset);
+  console.log();
+  if (TTY && process.stdin.isTTY) { try { process.stdin.setRawMode(false); } catch {} }
+  process.exit(0);
+}
+
+function listenForKeys() {
+  if (!process.stdin.isTTY) return; // non-interactive shell — nothing to listen for
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (key) => {
+    if (key.charCodeAt(0) === 3) { quit(); return; } // Ctrl+C -- raw mode intercepts the usual SIGINT
+    const k = key.trim().toLowerCase();
+    if (k === 'q') quit();
+    else if (k === 'r') requestRestart();
+    else if (k === 's') requestStop();
   });
 }
 
-process.on('SIGINT', () => {
-  stopRequested = true;
-  // The child shares this console, so it usually receives SIGINT on its own too —
-  // kill it explicitly as well since that isn't guaranteed on every platform.
-  if (child && !child.killed) { try { child.kill('SIGINT'); } catch {} }
-});
+process.on('SIGINT', quit); // covers environments where raw mode isn't available
 
 async function main() {
   banner();
@@ -219,29 +283,8 @@ async function main() {
     return;
   }
 
-  for (;;) {
-    const result = await runServer();
-
-    if (stopRequested) {
-      console.log();
-      status('●', C.gray, 'Stopped.');
-      console.log(C.dim + '  Goodbye!' + C.reset);
-      console.log();
-      return;
-    }
-
-    console.log();
-    if (!result.portConflict) {
-      status('✗', C.red, `Server stopped unexpectedly (exit code ${result.code}).`);
-    }
-    const choice = await promptRestartOrQuit();
-    if (choice === 'quit') {
-      console.log(C.dim + '  Goodbye!' + C.reset);
-      console.log();
-      return;
-    }
-    console.log();
-  }
+  listenForKeys();
+  await startChild();
 }
 
 main();
