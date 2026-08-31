@@ -1012,17 +1012,6 @@
       });
     }
 
-    // Auto-test on load if credentials are configured; collapse creds card on success
-    const cfg0 = getCredsFromForm();
-    if (cfg0.host && cfg0.user) {
-      testConnection(true).then(() => {
-        const credsCard = document.getElementById('rs-creds-card');
-        if (credsCard && rsConnDot && rsConnDot.classList.contains('rs-conn-dot--ok')) {
-          credsCard.open = false;
-        }
-      });
-    }
-
     // Save then immediately test connection
     const rsSaveBtn = document.getElementById('rs-save-creds');
     if (rsSaveBtn) {
@@ -2120,6 +2109,47 @@
         });
       });
     }
+
+    // ── Decide which section should be open on load ──────────────────────
+    // Whichever section actually needs attention right now: no saved credentials (or a
+    // failed connection) means Server Credentials; connected but the wizard isn't fully
+    // done means Server Setup; connected and fully set up means Content Sync, opened
+    // straight to the comparison with it already running.
+    (async function resolveDefaultOpenSection() {
+      const cfg = getCredsFromForm();
+      if (!cfg.host || !cfg.user) return; // nothing saved yet — leave Server Credentials open (its default)
+
+      const credsCard = document.getElementById('rs-creds-card');
+      const setupCard = document.getElementById('rs-setup-card');
+      const syncCard  = document.getElementById('rs-sync-card');
+
+      await testConnection(true);
+      const connected = rsConnDot && rsConnDot.classList.contains('rs-conn-dot--ok');
+
+      if (!connected) {
+        if (credsCard) credsCard.open = true;
+        if (setupCard) setupCard.open = false;
+        if (syncCard)  syncCard.open  = false;
+        return;
+      }
+
+      await loadSetupProgress();
+      const setupDone = stepPanels.length > 0 && stepPanels.every((_, i) => doneSteps.has(i));
+
+      if (credsCard) credsCard.open = false;
+      if (setupDone) {
+        if (setupCard) setupCard.open = false;
+        if (syncCard) {
+          syncCard.open = true;
+          const comparePanel = document.querySelector('.rs-sync-panel[data-panel="compare"]');
+          if (comparePanel) comparePanel.open = true;
+          runCompare();
+        }
+      } else {
+        if (setupCard) setupCard.open = true;
+        if (syncCard)  syncCard.open  = false;
+      }
+    })();
   })();
 
 })();

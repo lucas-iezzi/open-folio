@@ -216,7 +216,7 @@ sudo cp docs/Caddyfile.example /etc/caddy/Caddyfile  # edit domain first
 sudo systemctl reload caddy
 ```
 
-**Deploy tab:** The admin panel's Deploy tab (only shown when accessing locally — hostname is `localhost`, `127.0.0.1`, or a raw IP) has a step-by-step guide and an AI chat assistant for deployment questions.
+**Deploy tab:** The admin panel's Deploy tab (only shown when accessing locally — hostname is `localhost`, `127.0.0.1`, or a raw IP) has a step-by-step guide and an AI chat assistant for deployment questions. The four `<details class="rs-card">` sections (`#rs-creds-card`, `#rs-setup-card`, `#rs-sync-card`, `#rs-commands-card`) default to whichever one needs attention: `resolveDefaultOpenSection()` in `admin.js` tests the SSH connection and (if connected) fetches setup progress, then opens Credentials on no/failed connection, Setup if connected but not all 13 steps are done, or Sync — with its Compare sub-panel also opened and `runCompare()` fired immediately — once setup is complete. Clear Content lives inside Server Commands (not Content Sync) since it's a destructive admin action, not a routine sync operation.
 
 **Content sync:** All push/pull uses `scp` (bundled with OpenSSH — always available alongside `ssh`). No rsync dependency. Key endpoints:
 - `POST /admin/deploy/sync` — full push or pull (DB + all image dirs)

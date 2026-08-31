@@ -895,28 +895,11 @@ TTL:   Auto or 3600</pre>
                 </div>
               </details>
 
-              <details class="rs-sync-panel rs-sync-panel--danger" data-panel="clear">
-                <summary class="rs-sync-panel-head">
-                  <span class="rs-sync-icon">⚠</span>
-                  <div class="rs-sync-panel-info">
-                    <span class="rs-sync-panel-title">Clear content</span>
-                    <span class="rs-sync-panel-hint">Wipe all projects + project images, so a side can be pushed/pulled fresh</span>
-                  </div>
-                </summary>
-                <div class="rs-sync-panel-body">
-                  <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">Deletes all projects and project images on one side only (logos and site settings are kept). A backup is taken automatically first — but this still can't be undone from within the app. Use this to reset one side before a fresh push or pull.</p>
-                  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
-                    <button id="rs-clear-server-btn" class="btn btn-danger btn-sm">Clear all content from server</button>
-                    <button id="rs-clear-local-btn" class="btn btn-danger btn-sm">Clear all content from local site</button>
-                  </div>
-                  <div class="rs-log" id="rs-log-clear" aria-live="polite"></div>
-                </div>
-              </details>
             </div>
           </details>
 
           <!-- ── 4. Server Commands ── -->
-          <details class="rs-card">
+          <details class="rs-card" id="rs-commands-card">
             <summary class="rs-card-summary">
               <span class="rs-card-title">Server Commands</span>
               <span class="rs-card-subtitle">Restart, view logs, and update your live site</span>
@@ -963,6 +946,24 @@ TTL:   Auto or 3600</pre>
                 </div>
               </div>
               <div class="rs-log" id="rs-log-cmds" aria-live="polite"></div>
+
+              <details class="rs-sync-panel rs-sync-panel--danger" data-panel="clear" style="margin-top:1rem">
+                <summary class="rs-sync-panel-head">
+                  <span class="rs-sync-icon">⚠</span>
+                  <div class="rs-sync-panel-info">
+                    <span class="rs-sync-panel-title">Clear content</span>
+                    <span class="rs-sync-panel-hint">Wipe all projects + project images, so a side can be pushed/pulled fresh</span>
+                  </div>
+                </summary>
+                <div class="rs-sync-panel-body">
+                  <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">Deletes all projects and project images on one side only (logos and site settings are kept). A backup is taken automatically first — but this still can't be undone from within the app. Use this to reset one side before a fresh push or pull.</p>
+                  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+                    <button id="rs-clear-server-btn" class="btn btn-danger btn-sm">Clear all content from server</button>
+                    <button id="rs-clear-local-btn" class="btn btn-danger btn-sm">Clear all content from local site</button>
+                  </div>
+                  <div class="rs-log" id="rs-log-clear" aria-live="polite"></div>
+                </div>
+              </details>
             </div>
           </details>
 
