@@ -1,6 +1,6 @@
 # open-folio
 
-A self-hosted, open-source portfolio website. Built with Node.js, Express, and SQLite — no database servers, no build steps, no coding required to use it. Everything is managed through an admin panel and a simple launcher tool.
+A self-hosted, open-source portfolio website. Built with Node.js, Express, and SQLite — no proprietary servers, no subscription, no coding required to use it. Everything is managed through an admin panel and a simple launcher tool.
 
 ---
 
