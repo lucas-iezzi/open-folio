@@ -4,6 +4,8 @@
 (function () {
   'use strict';
 
+  const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+
   const state = {
     sid:          null,
     undoCount:    0,
@@ -169,7 +171,7 @@
     try {
       const res  = await fetch('/api/sandbox/prompt', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({
           sid:         state.sid,
           instruction: resolveMarkers(instruction),
@@ -206,7 +208,7 @@
     try {
       const res  = await fetch('/api/sandbox/undo', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({ sid: state.sid }),
       });
       const data = await res.json();
@@ -231,7 +233,7 @@
     try {
       const res  = await fetch('/api/sandbox/redo', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({ sid: state.sid }),
       });
       const data = await res.json();
@@ -257,7 +259,7 @@
     try {
       const res  = await fetch('/api/sandbox/reset', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({ sid: state.sid }),
       });
       const data = await res.json();
@@ -288,7 +290,7 @@
     try {
       const res = await fetch('/api/sandbox/styles/' + state.styleId, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({ sid: state.sid }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Save failed.');
@@ -317,7 +319,7 @@
     try {
       const res  = await fetch('/api/sandbox/styles', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
         body:    JSON.stringify({ sid: state.sid, name }),
       });
       const data = await res.json();
@@ -421,7 +423,11 @@
       if (importImageFile) fd.append('imageFile', importImageFile);
       if (importHtmlFile)  fd.append('htmlFile',  importHtmlFile);
 
-      const res  = await fetch('/api/sandbox/match-style', { method: 'POST', body: fd });
+      const res  = await fetch('/api/sandbox/match-style', {
+        method:  'POST',
+        headers: { 'X-CSRF-Token': csrf() },
+        body:    fd,
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Style import failed.');
 

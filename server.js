@@ -376,10 +376,12 @@ function requireCsrf(req, res, next) {
 // (guards SSH/deploy commands). Based on the Host header, not the socket address —
 // correct for this app's deployment model, where Caddy reverse-proxies the real
 // domain straight through, so live visitors always arrive with the actual domain as
-// Host while only genuinely local/direct requests show "localhost" or a raw IP. This
-// trust boundary depends on the setup wizard's firewall step keeping port 3000 itself
-// unreachable from outside — only 22/80/443 are opened, so the app is never reachable
-// except through Caddy (or from the machine itself).
+// Host while only genuinely local/direct requests show "localhost" or a raw IP.
+// A Host header is attacker-controlled on any request that actually reaches this
+// process, so this check is only sound because of where it's listening: see the
+// loopback-only bind in app.listen() below, which is what actually makes port 3000
+// unreachable except through Caddy (or from the machine itself) — a kernel-enforced
+// guarantee, not a firewall rule that can be skipped or misconfigured.
 function isLocalAccess(req) {
   return /^(localhost|127\.0\.0\.1|::1|\[::1\]|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.test(req.hostname);
 }
@@ -729,6 +731,14 @@ function hasActiveKey() {
   return !!process.env[PROVIDERS[getActiveProvider()].keyEnv];
 }
 
+// Logs the real error server-side (for debugging) but only ever hands the client a
+// generic message — upstream provider errors are out of our control and must never
+// be trusted to come back clean of request/key details.
+function logAiError(label, err) {
+  console.error(label, err.message);
+  return 'AI request failed. Check the server logs for details.';
+}
+
 // callAI — convenience wrapper for non-Studio AI calls; uses active provider + tier
 async function callAI({ messages, systemPrompt = '', tier = 'fast' }) {
   const p = getActiveProvider();
@@ -793,10 +803,12 @@ async function callLLM({ provider, model, messages, systemPrompt = studioSystemP
     });
     const body = { contents };
     if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    // Key goes in a header, not the URL — keeps it out of any string (logs, thrown
+    // network-error messages, proxy access logs) that captures the request URL.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -3568,8 +3580,7 @@ app.post('/admin/studio/generate', requireAuth, requireCsrf, async (req, res) =>
 
     res.json({ ok: true, project: projectData, summary });
   } catch (err) {
-    console.error('[studio/generate]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: logAiError('[studio/generate]', err) });
   }
 });
 
@@ -3700,8 +3711,7 @@ app.post('/admin/studio/refine', requireAuth, requireCsrf, async (req, res) => {
 
     res.json({ ok: true, message, regenerate: false });
   } catch (err) {
-    console.error('[studio/refine]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: logAiError('[studio/refine]', err) });
   }
 });
 
@@ -3902,12 +3912,14 @@ function requireApiKey(req, res, next) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UI SANDBOX API  (public, session-isolated, no auth required)
+// UI SANDBOX API  (admin-only — every route below requires an authenticated
+// admin session. This gates access to the configured AI provider key, so a
+// public deployment can't have its API spend run up by anonymous visitors.)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const SANDBOX_SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-app.get('/sandbox', (req, res) => {
+app.get('/sandbox', requireAuth, (req, res) => {
   // Generate a fresh session ID server-side so the iframe src is set in HTML
   // immediately — no waiting for JavaScript.
   const sid = crypto.randomBytes(16).toString('hex').replace(
@@ -3953,10 +3965,10 @@ app.get('/sandbox', (req, res) => {
     "object-src 'none'; " +
     "base-uri 'self'"
   );
-  res.render('sandbox', { sandboxSid, loadStyleId, loadStyleName, hasAI: hasActiveKey() });
+  res.render('sandbox', { sandboxSid, loadStyleId, loadStyleName, hasAI: hasActiveKey(), csrfToken: getCsrfToken(req) });
 });
 
-app.get('/sandbox/preview', (req, res) => {
+app.get('/sandbox/preview', requireAuth, (req, res) => {
   const { sid } = req.query;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).send('Invalid session ID.');
 
@@ -3994,7 +4006,7 @@ app.get('/sandbox/preview', (req, res) => {
 });
 
 // Sandbox preview for individual project pages — same-origin iframe, sandbox CSS injected inline
-app.get('/sandbox/preview/project/:slug', (req, res) => {
+app.get('/sandbox/preview/project/:slug', requireAuth, (req, res) => {
   const { sid } = req.query;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).send('Invalid session ID.');
 
@@ -4021,7 +4033,7 @@ app.get('/sandbox/preview/project/:slug', (req, res) => {
   res.render('project', { project, sandboxCss, ...getLogos() });
 });
 
-app.get('/api/sandbox/data', (req, res) => {
+app.get('/api/sandbox/data', requireAuth, (req, res) => {
   const projects = db.prepare(
     'SELECT slug, title, subtitle, thumbnail, thumbnailAlt FROM projects WHERE visible = 1 ORDER BY sort_order ASC'
   ).all();
@@ -4035,7 +4047,7 @@ app.get('/api/sandbox/data', (req, res) => {
   });
 });
 
-app.get('/api/sandbox/config', (req, res) => {
+app.get('/api/sandbox/config', requireAuth, (req, res) => {
   const { sid } = req.query;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
   const session = db.prepare('SELECT config, reference_html FROM sandbox_sessions WHERE session_id = ?').get(sid);
@@ -4052,7 +4064,7 @@ app.get('/api/sandbox/config', (req, res) => {
   });
 });
 
-app.post('/api/sandbox/prompt', sandboxPromptLimiter, async (req, res) => {
+app.post('/api/sandbox/prompt', requireAuth, requireCsrf, sandboxPromptLimiter, async (req, res) => {
   const { sid, instruction, currentPage } = req.body;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
   if (!instruction || typeof instruction !== 'string' || !instruction.trim()) {
@@ -4144,12 +4156,11 @@ app.post('/api/sandbox/prompt', sandboxPromptLimiter, async (req, res) => {
       redoCount:   validatedPaths.length > 0 ? 0 : sandboxRedoCount(sid),
     });
   } catch (err) {
-    console.error('[sandbox/prompt]', err.message);
-    res.status(500).json({ error: err.message || 'AI request failed.' });
+    res.status(500).json({ error: logAiError('[sandbox/prompt]', err) });
   }
 });
 
-app.post('/api/sandbox/undo', (req, res) => {
+app.post('/api/sandbox/undo', requireAuth, requireCsrf, (req, res) => {
   const { sid } = req.body;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
 
@@ -4170,7 +4181,7 @@ app.post('/api/sandbox/undo', (req, res) => {
   res.json({ config: JSON.parse(revision.config), undoCount: sandboxUndoCount(sid), redoCount: sandboxRedoCount(sid) });
 });
 
-app.post('/api/sandbox/redo', (req, res) => {
+app.post('/api/sandbox/redo', requireAuth, requireCsrf, (req, res) => {
   const { sid } = req.body;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
 
@@ -4191,7 +4202,7 @@ app.post('/api/sandbox/redo', (req, res) => {
   res.json({ config: JSON.parse(redoRow.config), undoCount: sandboxUndoCount(sid), redoCount: sandboxRedoCount(sid) });
 });
 
-app.post('/api/sandbox/reset', (req, res) => {
+app.post('/api/sandbox/reset', requireAuth, requireCsrf, (req, res) => {
   const { sid } = req.body;
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
 
@@ -4205,19 +4216,19 @@ app.post('/api/sandbox/reset', (req, res) => {
 
 // ── Saved styles ───────────────────────────────────────────────────
 
-app.get('/api/sandbox/styles', (req, res) => {
+app.get('/api/sandbox/styles', requireAuth, (req, res) => {
   const styles = db.prepare('SELECT id, name, is_active, updated_at FROM sandbox_styles ORDER BY updated_at DESC').all();
   res.json({ styles });
 });
 
-app.get('/api/sandbox/styles/:id', (req, res) => {
+app.get('/api/sandbox/styles/:id', requireAuth, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const style = db.prepare('SELECT id, name, config, is_active FROM sandbox_styles WHERE id = ?').get(id);
   if (!style) return res.status(404).json({ error: 'Style not found.' });
   res.json({ style: { ...style, config: JSON.parse(style.config) } });
 });
 
-app.post('/api/sandbox/styles', (req, res) => {
+app.post('/api/sandbox/styles', requireAuth, requireCsrf, (req, res) => {
   const { name, sid } = req.body;
   if (!name || typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Name is required.' });
   if (!sid || !SANDBOX_SID_RE.test(sid)) return res.status(400).json({ error: 'Invalid session ID.' });
@@ -4226,7 +4237,7 @@ app.post('/api/sandbox/styles', (req, res) => {
   res.json({ id: result.lastInsertRowid, name: name.trim() });
 });
 
-app.patch('/api/sandbox/styles/:id', (req, res) => {
+app.patch('/api/sandbox/styles/:id', requireAuth, requireCsrf, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const style = db.prepare('SELECT id FROM sandbox_styles WHERE id = ?').get(id);
   if (!style) return res.status(404).json({ error: 'Style not found.' });
@@ -4242,7 +4253,7 @@ app.patch('/api/sandbox/styles/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/sandbox/styles/:id', (req, res) => {
+app.delete('/api/sandbox/styles/:id', requireAuth, requireCsrf, (req, res) => {
   const id = parseInt(req.params.id, 10);
   db.prepare('DELETE FROM sandbox_styles WHERE id = ?').run(id);
   res.json({ ok: true });
@@ -4266,6 +4277,8 @@ app.post('/admin/sandbox/styles/deactivate', requireAuth, requireCsrf, (req, res
 // ── Import Style (URL + image + HTML/CSS file) ────────────────────
 
 app.post('/api/sandbox/match-style',
+  requireAuth,
+  requireCsrf,
   matchStyleLimiter,
   importStyleUpload.fields([{ name: 'imageFile', maxCount: 1 }, { name: 'htmlFile', maxCount: 1 }]),
   async (req, res) => {
@@ -4484,8 +4497,7 @@ app.post('/api/sandbox/match-style',
       redoCount: validatedPaths.length > 0 ? 0 : sandboxRedoCount(sid),
     });
   } catch (err) {
-    console.error('[sandbox/import-style]', err.message);
-    res.status(500).json({ error: 'Style import failed: ' + err.message });
+    res.status(500).json({ error: logAiError('[sandbox/import-style]', err) });
   }
 });
 
@@ -4529,8 +4541,7 @@ app.post('/api/admin/deploy-chat', requireAuth, requireCsrf, async (req, res) =>
     });
     res.json({ reply });
   } catch (err) {
-    console.error('[deploy-chat]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: logAiError('[deploy-chat]', err) });
   }
 });
 
@@ -4689,7 +4700,14 @@ app.use((err, req, res, next) => {
 // START
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.listen(PORT, () => {
+// Bind to loopback only — never 0.0.0.0. The whole local-access security model
+// (requireAuth/requireLocal skipping the password for "local" requests, detected by
+// Host header — see isLocalAccess above) depends on this process being physically
+// unreachable from any other machine. Caddy already always reverse-proxies to
+// localhost:3000 per DEPLOYMENT.md, so this changes nothing about how the app is
+// meant to be reached — it just makes that boundary a kernel guarantee instead of
+// something that silently breaks if a firewall rule is ever missing or misconfigured.
+app.listen(PORT, '127.0.0.1', () => {
   // scripts/start.js prints its own richer status once it's confirmed the server is
   // actually up, so it sets this to avoid printing two different "here's your URL"
   // messages back to back.

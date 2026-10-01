@@ -476,6 +476,124 @@ main { flex: 1; }
   letter-spacing: 0.01em;
 }
 
+/* ── Cookie banner ──────────────────────────────────────────── */
+.cookie-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 400;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px var(--side-pad);
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cookie-banner__text {
+  margin: 0;
+  max-width: 640px;
+}
+
+.cookie-banner__link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cookie-banner__ack {
+  flex: none;
+  border: 1px solid var(--color-bg);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: var(--font-weight-med);
+  padding: 8px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity var(--ease);
+}
+.cookie-banner__ack:hover { opacity: 0.85; }
+
+/* ── Privacy notice modal ──────────────────────────────────── */
+.privacy-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 410;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gap-md);
+}
+
+.privacy-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.privacy-modal__panel {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.privacy-modal__header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.privacy-modal__header h2 {
+  font-size: 18px;
+  font-weight: var(--font-weight-semi);
+}
+
+.privacy-modal__close {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 4px;
+}
+.privacy-modal__close:hover { color: var(--color-text); }
+
+.privacy-modal__body {
+  padding: 20px 24px 28px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-muted);
+}
+
+.privacy-modal__body p { margin: 0 0 14px; }
+.privacy-modal__body ul { margin: 0 0 14px; padding-left: 20px; }
+.privacy-modal__body li { margin-bottom: 8px; }
+.privacy-modal__body strong { color: var(--color-text); }
+.privacy-modal__body a { color: var(--color-text); text-decoration: underline; text-underline-offset: 2px; }
+
 /* ── Error / 404 pages ──────────────────────────────────────── */
 .error-page {
   display: flex;
