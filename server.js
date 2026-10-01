@@ -1579,7 +1579,11 @@ app.post('/admin/login', loginLimiter, async (req, res) => {
   if (!valid) {
     // Constant-time delay to prevent timing attacks
     await new Promise(r => setTimeout(r, 400 + Math.random() * 200));
-    return res.render('admin/login', {
+    // Status must be >= 400 here — loginLimiter's skipSuccessfulRequests treats any
+    // response under 400 as "successful" and uncounts it, which would otherwise erase
+    // every failed-password attempt from the rate limit (the one thing it exists to
+    // catch) while still correctly leaving a real successful login uncounted.
+    return res.status(401).render('admin/login', {
       error: 'Incorrect password.',
       csrfToken: getCsrfToken(req),
       ...getLogos(),
