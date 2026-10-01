@@ -523,18 +523,19 @@ main { flex: 1; }
   cursor: pointer;
 }
 
-.cookie-banner__close {
+.cookie-banner__ack {
   flex: none;
-  border: none;
-  background: none;
-  font-size: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  font: inherit;
   line-height: 1;
-  color: var(--color-subtle);
+  color: var(--color-text);
   cursor: pointer;
-  padding: 2px 4px;
-  transition: color var(--ease);
+  padding: 4px 10px;
+  transition: border-color var(--ease);
 }
-.cookie-banner__close:hover { color: var(--color-text); }
+.cookie-banner__ack:hover { border-color: var(--color-subtle); }
 
 /* ── Privacy notice modal ──────────────────────────────────── */
 .privacy-modal {
