@@ -7,10 +7,10 @@
     </div>
     <div class="privacy-modal__body">
       <p>This site is run by <strong><%= siteName %></strong>, who is responsible for the data described here.
-        <% if (privacyEmail) { %>Questions or requests: <a href="mailto:<%= privacyEmail %>"><%= privacyEmail %></a>.<% } else { %>For questions or requests, please contact the site owner.<% } %></p>
+        <% if (privacyEmail) { %>Questions or requests: <a href="mailto:<%= privacyEmail %>"><%= privacyEmail %></a>.<% } else { %>For questions or requests, contact the site owner using the contact details on this site.<% } %></p>
 
       <h3>What's collected</h3>
-      <p>When you view a page, the site records the page, the time, the page that linked you here, your browser's user-agent string, and your approximate location (country and city, as reported by Cloudflare). Your IP address is not stored. Only a one-way, keyed hash of it is kept to tell repeat visits apart.</p>
+      <p>When you view a page, the site records the page, the time, the page that linked you here, your browser's user-agent string, and the country you're visiting from (as reported by Cloudflare). Your IP address is not stored. Only a one-way, keyed hash of it is kept to tell repeat visits apart.</p>
 
       <h3>Why</h3>
       <p>To understand how the site is used. The legal basis is the owner's legitimate interest in running and improving the site (GDPR Art. 6(1)(f)).</p>
@@ -25,7 +25,7 @@
       <p>Data is never sold or shared. The site runs on a DigitalOcean server and is delivered through Cloudflare. Both process requests on the owner's behalf only to serve the site, and may do so outside your country under their standard data-protection terms.</p>
 
       <h3>Your rights</h3>
-      <p>Depending on where you live, you can ask to access, correct or delete your data, or object to its collection<% if (privacyEmail) { %> by emailing <a href="mailto:<%= privacyEmail %>"><%= privacyEmail %></a><% } %>. You can also complain to your local data protection authority.</p>
+      <p>Depending on where you live, you can ask to access, correct or delete your data, or object to its collection<% if (privacyEmail) { %> by emailing <a href="mailto:<%= privacyEmail %>"><%= privacyEmail %></a><% } else { %> by contacting the site owner<% } %>. You can also complain to your local data protection authority.</p>
 
       <p class="privacy-modal__meta">Last updated September 30, 2026 · Built on <a href="https://github.com/lucas-iezzi/open-folio" target="_blank" rel="noopener noreferrer">open-folio</a></p>
     </div>

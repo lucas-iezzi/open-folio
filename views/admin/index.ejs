@@ -481,9 +481,9 @@
             <textarea id="site-tagline-input" rows="3" style="width:100%;font-family:inherit;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;resize:vertical;background:var(--surface);color:var(--text);outline:none" maxlength="500"><%= siteTagline %></textarea>
           </div>
           <div>
-            <label for="privacy-email-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Privacy contact email <span style="font-weight:400;color:var(--muted);font-size:.8rem">(shown in the public privacy notice for data requests)</span></label>
+            <label for="privacy-email-input" style="display:block;font-size:.875rem;font-weight:600;margin-bottom:.35rem">Site owner email <span style="font-weight:400;color:var(--muted);font-size:.8rem">(used for privacy notice)</span></label>
             <input id="privacy-email-input" type="email" value="<%= privacyEmail %>" placeholder="privacy@yourdomain.com" maxlength="200" style="width:100%;font-family:inherit;font-size:.875rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);outline:none">
-            <% if (!privacyEmail) { %><p style="font-size:.8rem;color:var(--danger, #c0392b);margin-top:.35rem">Privacy laws like GDPR require a contact for data requests. Add one before going live.</p><% } %>
+            <p style="font-size:.8rem;color:var(--muted);margin-top:.35rem">Optional. If left blank, the notice points visitors to the contact details elsewhere on your site. Privacy laws like GDPR require some way to reach you, so make sure there is one.</p>
           </div>
           <div style="display:flex;align-items:center;gap:.75rem">
             <button type="submit" class="btn btn-primary btn-sm">Save</button>

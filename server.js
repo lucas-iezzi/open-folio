@@ -119,7 +119,7 @@ db.exec(`
 }
 
 // One-time privacy migration: visits used to store raw IPs (alongside an unkeyed
-// hash) and geolocate them through ip-api.com. Carry cached locations over onto
+// hash) and geolocate them through ip-api.com. Carry cached countries over onto
 // the visits, re-hash with the keyed hash, then erase the raw IPs and geo cache.
 {
   const hasRawIps   = db.prepare(`SELECT 1 FROM visits WHERE ip != '' LIMIT 1`).get();
@@ -129,8 +129,7 @@ db.exec(`
       if (hasGeoCache) {
         db.exec(`
           UPDATE visits SET
-            country_code = COALESCE((SELECT g.country_code FROM geo_cache g WHERE g.ip = visits.ip), ''),
-            city         = COALESCE((SELECT g.city         FROM geo_cache g WHERE g.ip = visits.ip), '')
+            country_code = COALESCE((SELECT g.country_code FROM geo_cache g WHERE g.ip = visits.ip), '')
           WHERE ip != '' AND country_code = ''
         `);
         db.exec('DROP TABLE geo_cache');
@@ -490,14 +489,13 @@ function publicProjects() {
 }
 
 // ── Visit tracking ────────────────────────────────────────────────────────────
-// Raw IPs are never stored. Location comes from the headers Cloudflare adds at its
-// edge (CF-IPCountry always; CF-IPCity once "Add visitor location headers" is on
-// in Cloudflare's Managed Transforms), so no IP ever leaves this server.
+// Raw IPs are never stored. Location is country-only, taken from the CF-IPCountry
+// header Cloudflare adds at its edge, so no IP ever leaves this server.
 const VISIT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 const _insertVisit = db.prepare(`
-  INSERT INTO visits (ts, path, type, ip_hash, referrer, ua, country_code, city)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO visits (ts, path, type, ip_hash, referrer, ua, country_code)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
 // Keyed with the session secret, so the hash can't be reversed by brute-forcing
@@ -515,8 +513,7 @@ function recordVisit(req, type = 'page') {
     const ua      = (req.headers['user-agent'] || '').slice(0, 200);
     const cc      = String(req.headers['cf-ipcountry'] || '').toUpperCase();
     const country = /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? cc : ''; // XX = unknown, T1 = Tor
-    const city    = String(req.headers['cf-ipcity'] || '').slice(0, 100);
-    _insertVisit.run(Date.now(), req.path, type, ip ? hashIp(ip) : '', ref, ua, country, city);
+    _insertVisit.run(Date.now(), req.path, type, ip ? hashIp(ip) : '', ref, ua, country);
   } catch { /* never let tracking errors surface to users */ }
 }
 
@@ -527,12 +524,12 @@ pruneOldVisits();
 setInterval(pruneOldVisits, 60 * 60 * 1000).unref();
 
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
-function visitLocation({ country_code: cc, city }) {
+function visitLocation({ country_code: cc }) {
   if (!cc) return '';
   let country = cc;
   try { country = regionNames.of(cc); } catch { /* keep the code */ }
   const flag = String.fromCodePoint(...[...cc].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
-  return [flag, city, country].filter(Boolean).join(' ');
+  return flag + ' ' + country;
 }
 
 function getActivityStats() {
@@ -1195,7 +1192,116 @@ function buildSandboxPreviewCSS(config, slug) {
   // Per-page CSS — only injected when rendering the matching project page
   if (slug && config.pageCSS && config.pageCSS[slug]) lines.push(config.pageCSS[slug]);
 
-  return lines.join('\n');
+  return hoistCssImports(lines.join('\n'));
+}
+
+// Browsers ignore @import unless it comes before every other rule, and customCSS
+// is appended after the generated rules — so pull any imports up to the top.
+const CSS_IMPORT_RE = /@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)['"]?\s*\)?[^;]*;/gi;
+function hoistCssImports(css) {
+  const imports = [];
+  const rest = css.replace(CSS_IMPORT_RE, (m) => { imports.push(m); return ''; });
+  return imports.length ? imports.join('\n') + '\n' + rest : css;
+}
+
+// ── Self-hosted sandbox fonts ─────────────────────────────────────────────────
+// The sandbox can use any web font (Google Fonts or any other CDN), but the live
+// site must never make visitors' browsers contact a third party. So when the
+// active style is served publicly, every remote @import stylesheet is fetched
+// server-side and inlined, and every remote font file is downloaded once into
+// public/fonts/sandbox/ and referenced from there. Changing the font in the
+// sandbox and activating it is all it takes: the new files are fetched on the
+// first request that needs them and reused after that.
+const SANDBOX_FONT_DIR   = path.join(__dirname, 'public', 'fonts', 'sandbox');
+const FONT_FILE_RE       = /\.(woff2?|ttf|otf|eot)(?:[?#].*)?$/i;
+const FONT_FETCH_UA      = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'; // makes Google Fonts serve woff2
+const MAX_FONT_BYTES     = 5 * 1024 * 1024;
+const _fontDownloads     = new Map(); // remote url → Promise<local path | null>
+const _localizedCssCache = new Map(); // source css → Promise<css>
+
+function isFetchableUrl(u) {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && !isPrivateHost(url.hostname);
+  } catch { return false; }
+}
+
+async function fetchLimited(url, accept) {
+  const resp = await fetch(url, {
+    headers: { 'User-Agent': FONT_FETCH_UA, Accept: accept },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.length > MAX_FONT_BYTES) throw new Error('too large');
+  return buf;
+}
+
+function downloadFont(remoteUrl) {
+  if (!_fontDownloads.has(remoteUrl)) {
+    _fontDownloads.set(remoteUrl, (async () => {
+      const ext  = (remoteUrl.match(FONT_FILE_RE) || [, 'woff2'])[1].toLowerCase();
+      const name = crypto.createHash('sha256').update(remoteUrl).digest('hex').slice(0, 24) + '.' + ext;
+      const file = path.join(SANDBOX_FONT_DIR, name);
+      if (!fs.existsSync(file)) {
+        const buf = await fetchLimited(remoteUrl, '*/*');
+        fs.mkdirSync(SANDBOX_FONT_DIR, { recursive: true });
+        fs.writeFileSync(file, buf);
+      }
+      return '/fonts/sandbox/' + name;
+    })().catch((err) => {
+      console.warn('[sandbox fonts] could not download', remoteUrl, '-', err.message);
+      _fontDownloads.delete(remoteUrl); // retry on a later request
+      return null;
+    }));
+  }
+  return _fontDownloads.get(remoteUrl);
+}
+
+// Rewrites remote font url()s in a stylesheet to local copies. `base` resolves
+// relative urls inside a fetched stylesheet.
+async function localizeFontUrls(css, base) {
+  const re = /url\(\s*['"]?([^'")]+)['"]?\s*\)/gi;
+  const swaps = new Map();
+  for (const [, raw] of css.matchAll(re)) {
+    let abs;
+    try { abs = new URL(raw, base).href; } catch { continue; }
+    if (!FONT_FILE_RE.test(new URL(abs).pathname) || !isFetchableUrl(abs) || swaps.has(raw)) continue;
+    swaps.set(raw, downloadFont(abs));
+  }
+  const local = new Map();
+  for (const [raw, p] of swaps) local.set(raw, await p);
+  return css.replace(re, (m, raw) => (local.get(raw) ? `url("${local.get(raw)}")` : m));
+}
+
+async function localizeSandboxFonts(css) {
+  if (!_localizedCssCache.has(css)) {
+    let complete = true;
+    const job = (async () => {
+      const inlined = [];
+      const rest = css.replace(CSS_IMPORT_RE, (m, url) => { inlined.push(url); return ''; });
+      const parts = [];
+      for (const url of inlined) {
+        if (!isFetchableUrl(url)) continue; // drop: would otherwise contact a third party
+        try {
+          const sheet = (await fetchLimited(url, 'text/css,*/*;q=0.1')).toString('utf8');
+          parts.push(await localizeFontUrls(hoistCssImports(sheet).replace(CSS_IMPORT_RE, ''), url));
+        } catch (err) {
+          complete = false;
+          console.warn('[sandbox fonts] could not fetch', url, '-', err.message);
+        }
+      }
+      parts.push(await localizeFontUrls(rest));
+      const out = parts.join('\n');
+      // Anything still pointing off-site failed to download — don't cache, so a later request retries.
+      if (!complete || /url\(\s*['"]?https?:/i.test(out)) _localizedCssCache.delete(css);
+      return out;
+    })();
+    _localizedCssCache.set(css, job);
+    if (_localizedCssCache.size > 50) _localizedCssCache.delete(_localizedCssCache.keys().next().value);
+  }
+  return _localizedCssCache.get(css);
 }
 
 // ── Match-Style helpers ───────────────────────────────────────────────────────
@@ -1292,7 +1398,7 @@ Use customCSS for everything beyond the 4 color tokens:
   • Letter-spacing, text-transform, font-weight adjustments
   • Any other visual detail from the reference
 
-FONT RULE: If the reference uses a recognizable Google Font (Inter, Lato, Poppins, DM Sans, Playfair Display, etc.), add @import url("https://fonts.googleapis.com/css2?family=...") and override font-family on body. The portfolio currently uses Montserrat — match the reference's typographic character.
+FONT RULE: If the reference uses a recognizable web font, add an @import url("...") of its stylesheet (Google Fonts, e.g. https://fonts.googleapis.com/css2?family=..., or any other font CDN) and override font-family on body. The portfolio currently uses Montserrat — match the reference's typographic character.
 
 RESPONSE FORMAT:
 {
@@ -1571,14 +1677,14 @@ app.get('/logo-size.css', (req, res) => {
   res.send(`:root { --logo-nav-size: ${size}px; }`);
 });
 
-app.get('/sandbox-active.css', (req, res) => {
+app.get('/sandbox-active.css', async (req, res) => {
   res.setHeader('Content-Type', 'text/css; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   const activeStyle = db.prepare('SELECT config FROM sandbox_styles WHERE is_active = 1 LIMIT 1').get();
   if (!activeStyle) return res.send('/* no active style */');
   const slug = (req.query.page && /^[a-z0-9-]{1,80}$/.test(req.query.page)) ? req.query.page : null;
   const css = buildSandboxPreviewCSS(JSON.parse(activeStyle.config), slug);
-  res.send(css);
+  res.send(await localizeSandboxFonts(css)); // never let visitors fetch fonts from a third party
 });
 
 app.get('/projects/:slug', (req, res, next) => {
@@ -2139,8 +2245,8 @@ app.get('/admin/dashboard', requireAuth, (req, res) => {
   // Allow inline <script> for the CSRF-token-dependent sandbox styles code.
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
+    "style-src 'self' https: 'unsafe-inline'; " +
+    "font-src 'self' https: data:; " +
     "img-src 'self' data: blob:; " +
     "script-src 'self' 'unsafe-inline'; " +
     "form-action 'self'; " +
@@ -3075,7 +3181,7 @@ app.post('/admin/settings/site-info', requireAuth, requireCsrf, (req, res) => {
   if (typeof privacyEmail === 'string') {
     const email = privacyEmail.trim();
     if (email && !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(email)) {
-      return res.status(400).json({ error: "Privacy contact email doesn't look like an email address." });
+      return res.status(400).json({ error: "Site owner email doesn't look like an email address." });
     }
     setSetting('privacy_email', email.slice(0, 200));
   }
@@ -3747,8 +3853,8 @@ app.get('/admin/studio/preview-page', requireAuth, (req, res) => {
   // Override the global frameAncestors:'none' so the admin studio can iframe this page
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
+    "style-src 'self' https:; " +
+    "font-src 'self' https: data:; " +
     "img-src 'self' data: blob:; " +
     "script-src 'self'; " +
     "form-action 'none'; " +
@@ -3978,8 +4084,8 @@ app.get('/sandbox', requireAuth, (req, res) => {
   // The global Helmet CSP blocks them; this override permits them for /sandbox only.
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
+    "style-src 'self' https: 'unsafe-inline'; " +
+    "font-src 'self' https: data:; " +
     "img-src 'self' data: blob:; " +
     "script-src 'self' 'unsafe-inline'; " +
     "form-action 'self'; " +
@@ -3997,8 +4103,8 @@ app.get('/sandbox/preview', requireAuth, (req, res) => {
   // Allow this page to be embedded in an iframe from the same origin
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
+    "style-src 'self' https: 'unsafe-inline'; " +
+    "font-src 'self' https: data:; " +
     "img-src 'self' data: blob:; " +
     "script-src 'self'; " +
     "form-action 'self'; " +
@@ -4042,8 +4148,8 @@ app.get('/sandbox/preview/project/:slug', requireAuth, (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
+    "style-src 'self' https: 'unsafe-inline'; " +
+    "font-src 'self' https: data:; " +
     "img-src 'self' data: blob:; " +
     "script-src 'self'; " +
     "form-action 'self'; " +
@@ -4288,6 +4394,9 @@ app.post('/admin/sandbox/styles/:id/activate', requireAuth, requireCsrf, (req, r
   if (!style) return res.status(404).json({ error: 'Style not found.' });
   db.prepare('UPDATE sandbox_styles SET is_active = 0').run();
   db.prepare("UPDATE sandbox_styles SET is_active = 1, updated_at = datetime('now') WHERE id = ?").run(id);
+  // Start downloading any new fonts now so the first visitor doesn't wait on them.
+  const { config } = db.prepare('SELECT config FROM sandbox_styles WHERE id = ?').get(id);
+  localizeSandboxFonts(buildSandboxPreviewCSS(JSON.parse(config), null));
   res.json({ ok: true });
 });
 

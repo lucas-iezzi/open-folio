@@ -16,3 +16,4 @@ npm-debug.log*
 .DS_Store
 .claude/
 .launcher-config.json
+public/fonts/sandbox/
