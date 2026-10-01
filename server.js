@@ -279,6 +279,17 @@ app.use((req, res, next) => {
 });
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
+// express-rate-limit's default keyGenerator uses req.ip, which under this app's
+// deploy topology (Cloudflare -> Caddy -> Node, trust proxy: 1) does not reliably
+// resolve to a stable per-visitor identity — Cloudflare's edge-to-origin leg isn't
+// guaranteed to reuse the same connection/IP across a visitor's requests. Caddy is
+// locked to only accept connections from Cloudflare's IP ranges (see Caddyfile), so
+// CF-Connecting-IP — set by Cloudflare itself from the real client connection, never
+// forwarded from the client — is the trustworthy per-visitor identity here instead.
+function clientIp(req) {
+  return req.headers['cf-connecting-ip'] || req.ip;
+}
+
 // Strict limit on login endpoint
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -287,6 +298,7 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
+  keyGenerator: clientIp,
 });
 
 // General limiter for all routes
@@ -295,6 +307,7 @@ const generalLimiter = rateLimit({
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
 });
 
 const sandboxPromptLimiter = rateLimit({
@@ -303,6 +316,7 @@ const sandboxPromptLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many sandbox requests. Please wait a moment.',
+  keyGenerator: clientIp,
 });
 
 const matchStyleLimiter = rateLimit({
@@ -311,6 +325,7 @@ const matchStyleLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many style-match requests. Please wait a moment.',
+  keyGenerator: clientIp,
 });
 
 app.use(generalLimiter);
