@@ -3,19 +3,17 @@
 (function () {
   'use strict';
 
+  // Remembered per browser: once dismissed, the banner never shows again here.
   var ACK_KEY = 'of_cookie_ack';
 
   var banner   = document.getElementById('cookie-banner');
-  var ackBtn   = document.getElementById('cookie-banner-ack');
+  var dismiss  = document.getElementById('cookie-banner-close');
   var linkBtn  = document.getElementById('cookie-banner-privacy-link');
   var modal    = document.getElementById('privacy-modal');
   var closeBtn = document.getElementById('privacy-modal-close');
   var backdrop = document.getElementById('privacy-modal-backdrop');
 
   if (!banner || !modal) return;
-
-  function showBanner() { banner.hidden = false; }
-  function hideBanner() { banner.hidden = true; }
 
   function openModal() {
     modal.hidden = false;
@@ -31,12 +29,12 @@
   var acknowledged = false;
   try { acknowledged = localStorage.getItem(ACK_KEY) === '1'; } catch (e) { /* storage unavailable */ }
 
-  if (!acknowledged) showBanner();
+  if (!acknowledged) banner.hidden = false;
 
-  if (ackBtn) {
-    ackBtn.addEventListener('click', function () {
+  if (dismiss) {
+    dismiss.addEventListener('click', function () {
       try { localStorage.setItem(ACK_KEY, '1'); } catch (e) { /* storage unavailable */ }
-      hideBanner();
+      banner.hidden = true;
     });
   }
 
