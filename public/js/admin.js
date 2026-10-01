@@ -63,13 +63,6 @@
   initProjectForm();
 
 
-  function countryFlag(code) {
-    if (!code || code.length !== 2) return '';
-    try {
-      return String.fromCodePoint(...[...code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
-    } catch { return ''; }
-  }
-
   // ════════════════════════════════════════════════════════════════════
   // DASHBOARD
   // ════════════════════════════════════════════════════════════════════
@@ -79,42 +72,6 @@
     initDeleteButtons();
     initImportExport();
     initToggleVisibility();
-    initActivityGeo();
-  }
-
-  function initActivityGeo() {
-    const activityTab = document.querySelector('.admin-tab[data-tab="activity"]');
-    if (!activityTab) return;
-    let loaded = false;
-    activityTab.addEventListener('click', () => {
-      if (loaded) return;
-      loaded = true;
-      fetchGeoData();
-    });
-  }
-
-  async function fetchGeoData() {
-    const geoCells = document.querySelectorAll('.visit-geo[data-ip]');
-    const ips = [...new Set([...geoCells].map(el => el.dataset.ip).filter(Boolean))];
-    if (!ips.length) {
-      geoCells.forEach(el => { el.textContent = '—'; });
-      return;
-    }
-    try {
-      const res  = await fetch('/admin/geo?ips=' + ips.map(encodeURIComponent).join(','));
-      const data = await res.json();
-      document.querySelectorAll('.visit-geo[data-ip]').forEach(el => {
-        const geo = data[el.dataset.ip];
-        if (!geo || (!geo.country && !geo.city)) {
-          el.textContent = '—';
-        } else {
-          const flag = countryFlag(geo.country_code);
-          el.textContent = [flag, geo.city, geo.country].filter(Boolean).join(' ');
-        }
-      });
-    } catch {
-      geoCells.forEach(el => { el.textContent = '—'; });
-    }
   }
 
   // ── Tab switching ────────────────────────────────────────────────
@@ -674,6 +631,7 @@
           body: JSON.stringify({
             siteName:    document.getElementById('site-name-input').value,
             siteTagline: document.getElementById('site-tagline-input').value,
+            privacyEmail: document.getElementById('privacy-email-input').value,
           }),
         });
         feedback.textContent = 'Saved.';

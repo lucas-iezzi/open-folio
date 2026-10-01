@@ -83,15 +83,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS visits_ts   ON visits(ts);
   CREATE INDEX IF NOT EXISTS visits_path ON visits(path);
 
-  CREATE TABLE IF NOT EXISTS geo_cache (
-    ip      TEXT    PRIMARY KEY,
-    country TEXT    NOT NULL DEFAULT '',
-    country_code TEXT NOT NULL DEFAULT '',
-    city    TEXT    NOT NULL DEFAULT '',
-    org     TEXT    NOT NULL DEFAULT '',
-    ts      INTEGER NOT NULL DEFAULT 0
-  );
-
   -- Records every image add/remove on this machine (local or server independently) so
   -- content sync can show real history, not just current-state snapshots.
   CREATE TABLE IF NOT EXISTS content_log (
@@ -120,6 +111,37 @@ db.exec(`
   const vcols = db.pragma('table_info(visits)').map(c => c.name);
   if (!vcols.includes('ip')) {
     db.exec(`ALTER TABLE visits ADD COLUMN ip TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!vcols.includes('country_code')) {
+    db.exec(`ALTER TABLE visits ADD COLUMN country_code TEXT NOT NULL DEFAULT ''`);
+    db.exec(`ALTER TABLE visits ADD COLUMN city TEXT NOT NULL DEFAULT ''`);
+  }
+}
+
+// One-time privacy migration: visits used to store raw IPs (alongside an unkeyed
+// hash) and geolocate them through ip-api.com. Carry cached locations over onto
+// the visits, re-hash with the keyed hash, then erase the raw IPs and geo cache.
+{
+  const hasRawIps   = db.prepare(`SELECT 1 FROM visits WHERE ip != '' LIMIT 1`).get();
+  const hasGeoCache = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'geo_cache'`).get();
+  if (hasRawIps || hasGeoCache) {
+    db.transaction(() => {
+      if (hasGeoCache) {
+        db.exec(`
+          UPDATE visits SET
+            country_code = COALESCE((SELECT g.country_code FROM geo_cache g WHERE g.ip = visits.ip), ''),
+            city         = COALESCE((SELECT g.city         FROM geo_cache g WHERE g.ip = visits.ip), '')
+          WHERE ip != '' AND country_code = ''
+        `);
+        db.exec('DROP TABLE geo_cache');
+      }
+      const rehash = db.prepare('UPDATE visits SET ip_hash = ? WHERE ip = ?');
+      for (const { ip } of db.prepare(`SELECT DISTINCT ip FROM visits WHERE ip != ''`).all()) {
+        rehash.run(hashIp(ip), ip);
+      }
+      db.exec(`UPDATE visits SET ip = ''`);
+    })();
+    db.exec('VACUUM'); // erased values linger in free pages until the file is rebuilt
   }
 }
 
@@ -256,9 +278,11 @@ function rowToProject(row) {
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
+      // Public pages load nothing from third parties — the privacy notice promises
+      // visitor IPs aren't shared, so keep fonts etc. self-hosted.
       defaultSrc:     ["'self'"],
-      styleSrc:       ["'self'", "https://fonts.googleapis.com"],
-      fontSrc:        ["'self'", "https://fonts.gstatic.com"],
+      styleSrc:       ["'self'"],
+      fontSrc:        ["'self'"],
       imgSrc:         ["'self'", "data:", "blob:"],
       scriptSrc:      ["'self'"],
       formAction:     ["'self'"],
@@ -356,6 +380,7 @@ app.set('views', path.join(__dirname, 'views'));
 // Expose plain-text site name to every view for <title> tags etc.
 app.use((req, res, next) => {
   res.locals.siteName = (getSetting('site_name') || 'Your Name').replace(/\n/g, ' ');
+  res.locals.privacyEmail = getSetting('privacy_email') || '';
   next();
 });
 
@@ -465,21 +490,49 @@ function publicProjects() {
 }
 
 // ── Visit tracking ────────────────────────────────────────────────────────────
+// Raw IPs are never stored. Location comes from the headers Cloudflare adds at its
+// edge (CF-IPCountry always; CF-IPCity once "Add visitor location headers" is on
+// in Cloudflare's Managed Transforms), so no IP ever leaves this server.
+const VISIT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
 const _insertVisit = db.prepare(`
-  INSERT INTO visits (ts, path, type, ip_hash, ip, referrer, ua)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO visits (ts, path, type, ip_hash, referrer, ua, country_code, city)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `);
+
+// Keyed with the session secret, so the hash can't be reversed by brute-forcing
+// the IPv4 space the way a plain SHA-256 of the IP could.
+function hashIp(ip) {
+  return crypto.createHmac('sha256', process.env.SESSION_SECRET).update(ip).digest('hex').slice(0, 16);
+}
 
 // TODO: consider deduplicating visits so a single visitor navigating across
 // multiple pages in a session only counts as one visit, not one per page.
 function recordVisit(req, type = 'page') {
   try {
-    const ip   = req.headers['cf-connecting-ip'] || req.ip || req.socket?.remoteAddress || '';
-    const hash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
-    const ref  = (req.headers['referer'] || req.headers['referrer'] || '').slice(0, 200);
-    const ua   = (req.headers['user-agent'] || '').slice(0, 200);
-    _insertVisit.run(Date.now(), req.path, type, hash, ip, ref, ua);
+    const ip      = req.headers['cf-connecting-ip'] || req.ip || req.socket?.remoteAddress || '';
+    const ref     = (req.headers['referer'] || req.headers['referrer'] || '').slice(0, 200);
+    const ua      = (req.headers['user-agent'] || '').slice(0, 200);
+    const cc      = String(req.headers['cf-ipcountry'] || '').toUpperCase();
+    const country = /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? cc : ''; // XX = unknown, T1 = Tor
+    const city    = String(req.headers['cf-ipcity'] || '').slice(0, 100);
+    _insertVisit.run(Date.now(), req.path, type, ip ? hashIp(ip) : '', ref, ua, country, city);
   } catch { /* never let tracking errors surface to users */ }
+}
+
+function pruneOldVisits() {
+  try { db.prepare('DELETE FROM visits WHERE ts < ?').run(Date.now() - VISIT_RETENTION_MS); } catch { /* retried next interval */ }
+}
+pruneOldVisits();
+setInterval(pruneOldVisits, 60 * 60 * 1000).unref();
+
+const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+function visitLocation({ country_code: cc, city }) {
+  if (!cc) return '';
+  let country = cc;
+  try { country = regionNames.of(cc); } catch { /* keep the code */ }
+  const flag = String.fromCodePoint(...[...cc].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+  return [flag, city, country].filter(Boolean).join(' ');
 }
 
 function getActivityStats() {
@@ -503,9 +556,9 @@ function getActivityStats() {
   `).all();
 
   const recent = db.prepare(`
-    SELECT ts, path, type, ip, referrer, ua
+    SELECT ts, path, type, referrer, ua, country_code, city
     FROM visits ORDER BY ts DESC LIMIT 100
-  `).all();
+  `).all().map(r => ({ ...r, location: visitLocation(r) }));
 
   return {
     totals: {
@@ -2107,6 +2160,7 @@ app.get('/admin/dashboard', requireAuth, (req, res) => {
     isLocalAccess: localAccess,
     siteName:      getSetting('site_name')    || '',
     siteTagline:   getSetting('site_tagline') || '',
+    privacyEmail:  getSetting('privacy_email') || '',
     logoNavSize:      parseInt(getSetting('logo_nav_size')) || 52,
     serverConfig:     readServerConfig().server || {},
     ...getLogos(),
@@ -3017,7 +3071,14 @@ app.post('/admin/deploy/push-backup', requireAuth, requireCsrf, requireLocal, (r
 
 // ── Site identity (name + tagline) ────────────────────────────────────────────
 app.post('/admin/settings/site-info', requireAuth, requireCsrf, (req, res) => {
-  const { siteName, siteTagline } = req.body;
+  const { siteName, siteTagline, privacyEmail } = req.body;
+  if (typeof privacyEmail === 'string') {
+    const email = privacyEmail.trim();
+    if (email && !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(email)) {
+      return res.status(400).json({ error: "Privacy contact email doesn't look like an email address." });
+    }
+    setSetting('privacy_email', email.slice(0, 200));
+  }
   if (typeof siteName === 'string')    setSetting('site_name',    siteName.slice(0, 100));
   if (typeof siteTagline === 'string') setSetting('site_tagline', siteTagline.slice(0, 500));
   res.json({ ok: true });
@@ -3317,64 +3378,6 @@ app.post('/admin/image/delete', requireAuth, requireCsrf, (req, res) => {
   } catch {
     res.status(500).json({ error: 'Could not delete file.' });
   }
-});
-
-// ── Geo lookup (admin only, results cached in DB) ─────────────────────────────
-const _geoGet    = db.prepare('SELECT * FROM geo_cache WHERE ip = ?');
-const _geoUpsert = db.prepare(`
-  INSERT INTO geo_cache (ip, country, country_code, city, org, ts)
-  VALUES (?, ?, ?, ?, ?, ?)
-  ON CONFLICT(ip) DO UPDATE SET
-    country      = excluded.country,
-    country_code = excluded.country_code,
-    city         = excluded.city,
-    org          = excluded.org,
-    ts           = excluded.ts
-`);
-
-app.get('/admin/geo', requireAuth, async (req, res) => {
-  const ips = (req.query.ips || '').split(',')
-    .map(s => s.trim())
-    .filter(s => s && /^[\d.a-fA-F:]+$/.test(s))
-    .slice(0, 50);
-
-  if (!ips.length) return res.json({});
-
-  const result = {};
-  const toFetch = [];
-
-  for (const ip of ips) {
-    const cached = _geoGet.get(ip);
-    if (cached) {
-      result[ip] = { country: cached.country, country_code: cached.country_code, city: cached.city, org: cached.org };
-    } else {
-      toFetch.push(ip);
-    }
-  }
-
-  if (toFetch.length) {
-    try {
-      const resp = await fetch('http://ip-api.com/batch?fields=query,status,country,countryCode,city,org', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(toFetch.map(ip => ({ query: ip }))),
-        signal: AbortSignal.timeout(6000),
-      });
-      const data = await resp.json();
-      for (const entry of data) {
-        const ip  = entry.query;
-        const geo = entry.status === 'success'
-          ? { country: entry.country || '', country_code: entry.countryCode || '', city: entry.city || '', org: entry.org || '' }
-          : { country: '', country_code: '', city: '', org: '' };
-        _geoUpsert.run(ip, geo.country, geo.country_code, geo.city, geo.org, Date.now());
-        result[ip] = geo;
-      }
-    } catch {
-      for (const ip of toFetch) result[ip] = null;
-    }
-  }
-
-  res.json(result);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-/* Cookie banner + privacy notice modal */
+/* Privacy banner + privacy notice modal */
 
 (function () {
   'use strict';
@@ -8,14 +8,29 @@
 
   var banner   = document.getElementById('cookie-banner');
   var dismiss  = document.getElementById('cookie-banner-close');
-  var linkBtn  = document.getElementById('cookie-banner-privacy-link');
   var modal    = document.getElementById('privacy-modal');
   var closeBtn = document.getElementById('privacy-modal-close');
   var backdrop = document.getElementById('privacy-modal-backdrop');
 
-  if (!banner || !modal) return;
+  if (banner) {
+    var acknowledged = false;
+    try { acknowledged = localStorage.getItem(ACK_KEY) === '1'; } catch (e) { /* storage unavailable */ }
+    if (!acknowledged) banner.hidden = false;
 
-  function openModal() {
+    if (dismiss) {
+      dismiss.addEventListener('click', function () {
+        try { localStorage.setItem(ACK_KEY, '1'); } catch (e) { /* storage unavailable */ }
+        banner.hidden = true;
+      });
+    }
+  }
+
+  if (!modal) return;
+
+  var opener = null;
+
+  function openModal(e) {
+    opener = e.currentTarget;
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
     closeBtn.focus();
@@ -24,21 +39,12 @@
   function closeModal() {
     modal.hidden = true;
     document.body.style.overflow = '';
+    if (opener) opener.focus();
   }
 
-  var acknowledged = false;
-  try { acknowledged = localStorage.getItem(ACK_KEY) === '1'; } catch (e) { /* storage unavailable */ }
-
-  if (!acknowledged) banner.hidden = false;
-
-  if (dismiss) {
-    dismiss.addEventListener('click', function () {
-      try { localStorage.setItem(ACK_KEY, '1'); } catch (e) { /* storage unavailable */ }
-      banner.hidden = true;
-    });
-  }
-
-  if (linkBtn) linkBtn.addEventListener('click', openModal);
+  document.querySelectorAll('[data-open-privacy]').forEach(function (btn) {
+    btn.addEventListener('click', openModal);
+  });
   if (closeBtn) closeBtn.addEventListener('click', closeModal);
   if (backdrop) backdrop.addEventListener('click', closeModal);
 
